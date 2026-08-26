@@ -8,12 +8,38 @@ but prediction-market platforms iterate their APIs fairly often.
 
 import time
 import logging
+import json
+import os
 import requests
 
 log = logging.getLogger("polymarket_api")
 
 DATA_API_BASE = "https://data-api.polymarket.com"
-GAMMA_API_BASE = "https://gamma-api.polymarket.com"  # market metadata / resolutions
+GAMMA_API_BASE = "https://gamma-api.polymarket.com"
+
+# Event categories basically never change once assigned, so cache them to
+# disk (not just in-memory) — that way every run after the first one, even
+# a brand-new `python consensus_bot.py` invocation, skips re-fetching
+# categories for events it's already seen.
+CATEGORY_CACHE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "category_cache.json")
+
+
+def _load_category_cache() -> dict:
+    if os.path.exists(CATEGORY_CACHE_FILE):
+        try:
+            with open(CATEGORY_CACHE_FILE, "r") as f:
+                return json.load(f)
+        except (json.JSONDecodeError, OSError):
+            return {}
+    return {}
+
+
+def _save_category_cache(cache: dict) -> None:
+    try:
+        with open(CATEGORY_CACHE_FILE, "w") as f:
+            json.dump(cache, f)
+    except OSError:
+        pass  # caching is a nice-to-have — never let a write failure be fatal  # market metadata / resolutions
 
 
 def fetch_leaderboard(period: str = "30d", limit: int = 20) -> list[str]:
@@ -73,8 +99,10 @@ PREFERRED_CATEGORY_LABELS = [
 
 def fetch_event_categories(event_ids: list[str]) -> dict[str, str]:
     """Look up each event's category via the Gamma API's dedicated
-    /events/{id}/tags endpoint (confirmed working against live data —
-    the /markets?condition_ids=... approach silently returns nothing).
+    /events/{id}/tags endpoint. Checks the local cache first (see
+    CATEGORY_CACHE_FILE) and only hits the network for events not already
+    known — categories basically never change once assigned, so this
+    persists across separate script runs, not just within one process.
 
     Returns {event_id: category_label}. An event, e.g. an EPL match, is
     usually tagged with several labels of different specificity (e.g.
@@ -87,11 +115,22 @@ def fetch_event_categories(event_ids: list[str]) -> dict[str, str]:
         return {}
 
     unique_ids = list(dict.fromkeys(str(e) for e in event_ids if e))
-    categories: dict[str, str] = {}
+    cache = _load_category_cache()
 
-    for i, event_id in enumerate(unique_ids, start=1):
-        if i % 10 == 0 or i == len(unique_ids):
-            log.info("  ...categories: %d/%d events done", i, len(unique_ids))
+    categories: dict[str, str] = {}
+    to_fetch = []
+    for event_id in unique_ids:
+        if event_id in cache:
+            categories[event_id] = cache[event_id]
+        else:
+            to_fetch.append(event_id)
+
+    log.info("Category cache: %d/%d already known, fetching %d new",
+              len(unique_ids) - len(to_fetch), len(unique_ids), len(to_fetch))
+
+    for i, event_id in enumerate(to_fetch, start=1):
+        if i % 10 == 0 or i == len(to_fetch):
+            log.info("  ...categories: %d/%d new events done", i, len(to_fetch))
         try:
             resp = requests.get(f"{GAMMA_API_BASE}/events/{event_id}/tags", timeout=15)
             resp.raise_for_status()
@@ -103,6 +142,10 @@ def fetch_event_categories(event_ids: list[str]) -> dict[str, str]:
         except requests.RequestException:
             categories[event_id] = "Uncategorized"
         time.sleep(0.05)
+
+    if to_fetch:
+        cache.update({eid: categories[eid] for eid in to_fetch})
+        _save_category_cache(cache)
 
     return categories
 

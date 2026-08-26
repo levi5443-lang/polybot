@@ -74,7 +74,7 @@ def reconstruct_position_at(wallet_trades: list[dict], cutoff_ts: float) -> dict
 
 def run_backtest():
     log.info("Fetching current top-trader leaderboard as our tracked set...")
-    wallets = fetch_leaderboard(window="all", limit=NUM_TOP_TRADERS)
+    wallets = fetch_leaderboard(period="all", limit=NUM_TOP_TRADERS)
     log.info("Tracking %d wallets (NOTE: survivorship bias — see module docstring).", len(wallets))
 
     log.info("Fetching %d resolved markets to test against...", MARKETS_TO_TEST)
