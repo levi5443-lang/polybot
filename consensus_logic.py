@@ -25,6 +25,7 @@ class ConsensusSignal:
     outcome: str
     agreeing_wallets: list = field(default_factory=list)
     total_size_usd: float = 0.0
+    category: str = "Uncategorized"
 
     @property
     def count(self) -> int:
@@ -38,6 +39,7 @@ class ConsensusSignal:
             "agree_count": self.count,
             "total_tracked": total_tracked,
             "total_size_usd": round(self.total_size_usd, 2),
+            "category": self.category,
         }
 
 
@@ -71,3 +73,10 @@ def compute_consensus(all_positions: list[Position], threshold: int = CONSENSUS_
             signal.agreeing_wallets.append(pos.wallet)
             signal.total_size_usd += pos.size_usd
     return [s for s in grouped.values() if s.count >= threshold]
+
+
+def attach_categories(signals: list[ConsensusSignal], category_map: dict[str, str]) -> None:
+    """Label each signal in-place using a {market_id: category} map,
+    e.g. the output of polymarket_api.fetch_market_categories()."""
+    for s in signals:
+        s.category = category_map.get(s.market_id, "Uncategorized")

@@ -47,7 +47,7 @@ def send_telegram_alert(message: str, bot_token: str = None, chat_id: str = None
 def format_consensus_message(signal, total_tracked: int) -> str:
     """Build a readable alert message from a ConsensusSignal."""
     return (
-        f"*Polymarket Consensus Signal*\n\n"
+        f"*Polymarket Consensus Signal*  _[{signal.category}]_\n\n"
         f"Market: {signal.market_question}\n"
         f"Outcome: *{signal.outcome}*\n"
         f"Agreement: {signal.count}/{total_tracked} tracked top traders\n"
