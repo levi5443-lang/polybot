@@ -152,6 +152,29 @@
   }
   .empty-state .mono { display: block; margin-top: 8px; font-size: 12px; opacity: 0.7; }
 
+  .cat-filters { display: flex; gap: 6px; flex-wrap: wrap; }
+  .cat-chip {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    padding: 3px 10px;
+    border-radius: 12px;
+    border: 1px solid var(--panel-border);
+    color: var(--text-dim);
+    cursor: pointer;
+    background: transparent;
+    text-transform: none;
+    user-select: none;
+  }
+  .cat-chip:hover { border-color: var(--amber-dim); color: var(--text); }
+  .cat-chip.active {
+    background: var(--amber);
+    border-color: var(--amber);
+    color: #14171A;
+    font-weight: 600;
+  }
+
+  .category-cell { color: var(--text-dim); font-size: 12px; font-family: 'IBM Plex Mono', monospace; }
+
   .footer-note {
     margin-top: 20px;
     font-size: 11px;
@@ -173,11 +196,15 @@
 </header>
 
 <div class="panel">
-  <div class="panel-head">Active consensus signals</div>
+  <div class="panel-head" style="display:flex; justify-content:space-between; align-items:center;">
+    <span>Active consensus signals</span>
+    <div class="cat-filters" id="cat-filters"></div>
+  </div>
   <table id="signal-table">
     <thead>
       <tr>
-        <th style="width: 40%;">Market</th>
+        <th style="width: 34%;">Market</th>
+        <th>Category</th>
         <th>Outcome</th>
         <th>Agreement</th>
         <th style="text-align:right;">Aggregate size</th>
@@ -195,6 +222,8 @@
 
 <script>
   const REFRESH_MS = 15000;
+  let activeCategory = null; // null = show all
+  let latestData = null;
 
   function timeAgo(ts) {
     if (!ts) return "—";
@@ -215,10 +244,63 @@
     return html;
   }
 
+  function renderCategoryFilters(categories) {
+    const container = document.getElementById('cat-filters');
+    const chips = ['All', ...categories].map(cat => {
+      const isAll = cat === 'All';
+      const isActive = isAll ? activeCategory === null : activeCategory === cat;
+      return `<span class="cat-chip ${isActive ? 'active' : ''}" data-cat="${isAll ? '' : escapeHtml(cat)}">${escapeHtml(cat)}</span>`;
+    }).join('');
+    container.innerHTML = chips;
+
+    container.querySelectorAll('.cat-chip').forEach(chip => {
+      chip.addEventListener('click', () => {
+        const cat = chip.getAttribute('data-cat');
+        activeCategory = cat === '' ? null : cat;
+        renderTable();
+        renderCategoryFilters(categories);
+      });
+    });
+  }
+
+  function renderTable() {
+    if (!latestData) return;
+    const rows = document.getElementById('signal-rows');
+    const emptyState = document.getElementById('empty-state');
+
+    let signals = latestData.signals || [];
+    if (activeCategory) {
+      signals = signals.filter(s => s.category === activeCategory);
+    }
+
+    if (signals.length === 0) {
+      rows.innerHTML = '';
+      emptyState.style.display = 'block';
+      return;
+    }
+    emptyState.style.display = 'none';
+
+    rows.innerHTML = signals.map(s => `
+      <tr>
+        <td class="market-q">${escapeHtml(s.market_question)}</td>
+        <td class="category-cell">${escapeHtml(s.category || 'Uncategorized')}</td>
+        <td><span class="outcome-tag">${escapeHtml(s.outcome)}</span></td>
+        <td>
+          <div class="meter">
+            ${renderDots(s.agree_count, s.total_tracked)}
+            <span class="meter-count">${s.agree_count}/${s.total_tracked}</span>
+          </div>
+        </td>
+        <td style="text-align:right;" class="size">$${Number(s.total_size_usd).toLocaleString()}</td>
+      </tr>
+    `).join('');
+  }
+
   async function refresh() {
     try {
       const res = await fetch('/api/consensus');
       const data = await res.json();
+      latestData = data;
 
       document.getElementById('tracked-count').textContent = data.tracked_wallets || '—';
       document.getElementById('updated-at').textContent = timeAgo(data.updated_at);
@@ -240,29 +322,8 @@
         errorNote.textContent = '';
       }
 
-      const rows = document.getElementById('signal-rows');
-      const emptyState = document.getElementById('empty-state');
-
-      if (!data.signals || data.signals.length === 0) {
-        rows.innerHTML = '';
-        emptyState.style.display = 'block';
-        return;
-      }
-      emptyState.style.display = 'none';
-
-      rows.innerHTML = data.signals.map(s => `
-        <tr>
-          <td class="market-q">${escapeHtml(s.market_question)}</td>
-          <td><span class="outcome-tag">${escapeHtml(s.outcome)}</span></td>
-          <td>
-            <div class="meter">
-              ${renderDots(s.agree_count, s.total_tracked)}
-              <span class="meter-count">${s.agree_count}/${s.total_tracked}</span>
-            </div>
-          </td>
-          <td style="text-align:right;" class="size">$${Number(s.total_size_usd).toLocaleString()}</td>
-        </tr>
-      `).join('');
+      renderCategoryFilters(data.categories || []);
+      renderTable();
     } catch (e) {
       document.getElementById('status-dot').classList.add('stale');
       document.getElementById('status-text').textContent = 'disconnected';
