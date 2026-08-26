@@ -1,7 +1,8 @@
 """
 webapp/main.py — dashboard backend.
 
-Runs a background refresh loop (same data as consensus_bot.py) and serves it
+Runs a background refresh loop building separate top-10 leaderboards per
+category (see category_leaderboard.py), and serves the resulting signals
 over a small JSON API + a static frontend.
 
 Run locally:
@@ -23,21 +24,24 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
-# allow importing the sibling modules (polymarket_api.py, consensus_logic.py)
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 
-from polymarket_api import fetch_leaderboard, fetch_positions, fetch_event_categories, polite_sleep  # noqa: E402
-from consensus_logic import parse_positions, compute_consensus, attach_categories, CONSENSUS_THRESHOLD  # noqa: E402
+from category_leaderboard import (  # noqa: E402
+    build_category_data,
+    compute_category_consensus,
+    CANDIDATE_POOL_SIZE,
+    TOP_N_PER_CATEGORY,
+    CATEGORY_CONSENSUS_THRESHOLD,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger("dashboard")
 
-NUM_TOP_TRADERS = 20
 LEADERBOARD_PERIOD = "30d"    # "1d" | "7d" | "30d" | "all"
-REFRESH_SECONDS = 120
+# A full pass now covers CANDIDATE_POOL_SIZE wallets (not just 20), so this
+# needs more headroom than before — bump if you see overlapping refreshes.
+REFRESH_SECONDS = 240
 
-# In-memory cache the frontend polls — good enough for a single-instance
-# prototype; move to Supabase/Redis if you scale this to multiple instances.
 _cache = {
     "updated_at": None,
     "tracked_wallets": 0,
@@ -50,30 +54,26 @@ _cache = {
 async def refresh_loop():
     while True:
         try:
-            wallets = await asyncio.to_thread(fetch_leaderboard, LEADERBOARD_PERIOD, NUM_TOP_TRADERS)
-            all_positions = []
-            for wallet in wallets:
-                raw = await asyncio.to_thread(fetch_positions, wallet)
-                all_positions.extend(parse_positions(wallet, raw))
-                await asyncio.sleep(0.2)
-
-            signals = compute_consensus(all_positions, threshold=CONSENSUS_THRESHOLD)
+            data = await asyncio.to_thread(build_category_data, LEADERBOARD_PERIOD)
+            signals = await asyncio.to_thread(
+                compute_category_consensus, data, CATEGORY_CONSENSUS_THRESHOLD
+            )
             signals.sort(key=lambda s: s.count, reverse=True)
 
-            try:
-                category_map = await asyncio.to_thread(
-                    fetch_event_categories, [s.event_id for s in signals]
-                )
-                attach_categories(signals, category_map)
-            except Exception as e:
-                log.warning("Category lookup failed (signals will be Uncategorized): %s", e)
+            # total_tracked for display purposes: how many wallets were in
+            # THAT signal's own category leaderboard, not the whole pool.
+            signal_dicts = []
+            for s in signals:
+                cat_wallet_count = len(data["category_top_wallets"].get(s.category, []))
+                signal_dicts.append(s.to_dict(cat_wallet_count))
 
             _cache["updated_at"] = time.time()
-            _cache["tracked_wallets"] = len(wallets)
-            _cache["signals"] = [s.to_dict(len(wallets)) for s in signals]
-            _cache["categories"] = sorted({s.category for s in signals})
+            _cache["tracked_wallets"] = len(data["wallets"])
+            _cache["signals"] = signal_dicts
+            _cache["categories"] = sorted(data["category_top_wallets"].keys())
             _cache["error"] = None
-            log.info("Refreshed: %d wallets, %d signals", len(wallets), len(signals))
+            log.info("Refreshed: %d candidate wallets, %d categories, %d signals",
+                      len(data["wallets"]), len(data["category_top_wallets"]), len(signals))
         except Exception as e:
             log.error("Refresh failed: %s", e)
             _cache["error"] = str(e)
