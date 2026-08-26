@@ -23,9 +23,12 @@ for a pass to finish before the next one starts.
 """
 
 from collections import defaultdict
+import logging
 
 from polymarket_api import fetch_leaderboard, fetch_positions, fetch_event_categories, polite_sleep
 from consensus_logic import parse_positions, compute_consensus
+
+log = logging.getLogger("category_leaderboard")
 
 CANDIDATE_POOL_SIZE = 100   # how many wallets to pull from the global leaderboard first
 TOP_N_PER_CATEGORY = 10     # how many top wallets count as "the leaderboard" within a category
@@ -38,6 +41,14 @@ CATEGORY_CONSENSUS_THRESHOLD = 3
 
 
 def build_category_data(period: str = "30d") -> dict:
+    """
+    NOTE: this touches CANDIDATE_POOL_SIZE wallets one at a time (plus one
+    request per unique event afterward) — with the default of 100, that's
+    on the order of 150+ sequential network calls. It can easily take a
+    few minutes with NO output in between if you don't log progress, which
+    looks exactly like a hang even when it isn't. Progress lines below are
+    there specifically so you're never staring at a silent terminal.
+    """
     """Do the heavy lifting once per cycle: pull the candidate pool, their
     positions, categorize everything, and rank wallets within each category.
 
@@ -48,18 +59,23 @@ def build_category_data(period: str = "30d") -> dict:
       - category_top_wallets: {category: [wallet, ...]} (top N per category)
     """
     wallets = fetch_leaderboard(period=period, limit=CANDIDATE_POOL_SIZE)
+    log.info("Got %d candidate wallets. Fetching positions (this is the slow part)...", len(wallets))
 
     all_positions = []
-    for wallet in wallets:
+    for i, wallet in enumerate(wallets, start=1):
         try:
             raw = fetch_positions(wallet)
             all_positions.extend(parse_positions(wallet, raw))
         except Exception:
             pass  # one bad wallet shouldn't kill the whole pass
+        if i % 10 == 0 or i == len(wallets):
+            log.info("  ...positions: %d/%d wallets done", i, len(wallets))
         polite_sleep(0.15)
 
-    event_ids = [p.event_id for p in all_positions if p.event_id]
+    event_ids = list(dict.fromkeys(p.event_id for p in all_positions if p.event_id))
+    log.info("Found %d unique events across all positions. Looking up categories...", len(event_ids))
     category_map = fetch_event_categories(event_ids)
+    log.info("Category lookup done.")
 
     # Sum each wallet's position size within each category.
     wallet_category_size: dict = defaultdict(lambda: defaultdict(float))

@@ -7,7 +7,10 @@ but prediction-market platforms iterate their APIs fairly often.
 """
 
 import time
+import logging
 import requests
+
+log = logging.getLogger("polymarket_api")
 
 DATA_API_BASE = "https://data-api.polymarket.com"
 GAMMA_API_BASE = "https://gamma-api.polymarket.com"  # market metadata / resolutions
@@ -86,7 +89,9 @@ def fetch_event_categories(event_ids: list[str]) -> dict[str, str]:
     unique_ids = list(dict.fromkeys(str(e) for e in event_ids if e))
     categories: dict[str, str] = {}
 
-    for event_id in unique_ids:
+    for i, event_id in enumerate(unique_ids, start=1):
+        if i % 10 == 0 or i == len(unique_ids):
+            log.info("  ...categories: %d/%d events done", i, len(unique_ids))
         try:
             resp = requests.get(f"{GAMMA_API_BASE}/events/{event_id}/tags", timeout=15)
             resp.raise_for_status()
