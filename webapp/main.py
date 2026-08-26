@@ -26,14 +26,14 @@ from fastapi.responses import FileResponse
 # allow importing the sibling modules (polymarket_api.py, consensus_logic.py)
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 
-from polymarket_api import fetch_leaderboard, fetch_positions, polite_sleep  # noqa: E402
-from consensus_logic import parse_positions, compute_consensus, CONSENSUS_THRESHOLD  # noqa: E402
+from polymarket_api import fetch_leaderboard, fetch_positions, fetch_event_categories, polite_sleep  # noqa: E402
+from consensus_logic import parse_positions, compute_consensus, attach_categories, CONSENSUS_THRESHOLD  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger("dashboard")
 
 NUM_TOP_TRADERS = 20
-LEADERBOARD_WINDOW = "month"
+LEADERBOARD_PERIOD = "30d"    # "1d" | "7d" | "30d" | "all"
 REFRESH_SECONDS = 120
 
 # In-memory cache the frontend polls — good enough for a single-instance
@@ -42,6 +42,7 @@ _cache = {
     "updated_at": None,
     "tracked_wallets": 0,
     "signals": [],
+    "categories": [],
     "error": None,
 }
 
@@ -49,7 +50,7 @@ _cache = {
 async def refresh_loop():
     while True:
         try:
-            wallets = await asyncio.to_thread(fetch_leaderboard, LEADERBOARD_WINDOW, NUM_TOP_TRADERS)
+            wallets = await asyncio.to_thread(fetch_leaderboard, LEADERBOARD_PERIOD, NUM_TOP_TRADERS)
             all_positions = []
             for wallet in wallets:
                 raw = await asyncio.to_thread(fetch_positions, wallet)
@@ -59,9 +60,18 @@ async def refresh_loop():
             signals = compute_consensus(all_positions, threshold=CONSENSUS_THRESHOLD)
             signals.sort(key=lambda s: s.count, reverse=True)
 
+            try:
+                category_map = await asyncio.to_thread(
+                    fetch_event_categories, [s.event_id for s in signals]
+                )
+                attach_categories(signals, category_map)
+            except Exception as e:
+                log.warning("Category lookup failed (signals will be Uncategorized): %s", e)
+
             _cache["updated_at"] = time.time()
             _cache["tracked_wallets"] = len(wallets)
             _cache["signals"] = [s.to_dict(len(wallets)) for s in signals]
+            _cache["categories"] = sorted({s.category for s in signals})
             _cache["error"] = None
             log.info("Refreshed: %d wallets, %d signals", len(wallets), len(signals))
         except Exception as e:
