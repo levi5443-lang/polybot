@@ -16,6 +16,7 @@ class Position:
     market_question: str
     outcome: str
     size_usd: float
+    event_id: str = ""
 
 
 @dataclass
@@ -26,6 +27,7 @@ class ConsensusSignal:
     agreeing_wallets: list = field(default_factory=list)
     total_size_usd: float = 0.0
     category: str = "Uncategorized"
+    event_id: str = ""
 
     @property
     def count(self) -> int:
@@ -58,6 +60,7 @@ def parse_positions(wallet: str, raw: list[dict], min_size: float = MIN_POSITION
             market_question=p.get("title") or p.get("question", "unknown market"),
             outcome=p.get("outcome", "unknown"),
             size_usd=size_usd,
+            event_id=str(p.get("eventId") or ""),
         ))
     return out
 
@@ -67,7 +70,9 @@ def compute_consensus(all_positions: list[Position], threshold: int = CONSENSUS_
     for pos in all_positions:
         key = (pos.market_id, pos.outcome)
         if key not in grouped:
-            grouped[key] = ConsensusSignal(pos.market_id, pos.market_question, pos.outcome)
+            grouped[key] = ConsensusSignal(
+                pos.market_id, pos.market_question, pos.outcome, event_id=pos.event_id
+            )
         signal = grouped[key]
         if pos.wallet not in signal.agreeing_wallets:
             signal.agreeing_wallets.append(pos.wallet)
@@ -76,7 +81,7 @@ def compute_consensus(all_positions: list[Position], threshold: int = CONSENSUS_
 
 
 def attach_categories(signals: list[ConsensusSignal], category_map: dict[str, str]) -> None:
-    """Label each signal in-place using a {market_id: category} map,
-    e.g. the output of polymarket_api.fetch_market_categories()."""
+    """Label each signal in-place using a {event_id: category} map,
+    e.g. the output of polymarket_api.fetch_event_categories()."""
     for s in signals:
-        s.category = category_map.get(s.market_id, "Uncategorized")
+        s.category = category_map.get(s.event_id, "Uncategorized")

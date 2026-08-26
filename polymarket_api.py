@@ -62,38 +62,42 @@ def fetch_resolved_markets(limit: int = 100, offset: int = 0) -> list[dict]:
     return resp.json()
 
 
-def fetch_market_categories(condition_ids: list[str]) -> dict[str, str]:
-    """Look up each market's primary category/tag label via the Gamma API.
+PREFERRED_CATEGORY_LABELS = [
+    "Politics", "Sports", "Crypto", "Pop Culture", "Business",
+    "Science", "Entertainment", "Elections", "Economy", "Weather",
+]
 
-    Returns {condition_id: category_label}, e.g. {"0xabc...": "Politics"}.
-    Markets with no resolvable tag map to "Uncategorized" rather than being
-    dropped, so callers never have to special-case a missing key.
+
+def fetch_event_categories(event_ids: list[str]) -> dict[str, str]:
+    """Look up each event's category via the Gamma API's dedicated
+    /events/{id}/tags endpoint (confirmed working against live data —
+    the /markets?condition_ids=... approach silently returns nothing).
+
+    Returns {event_id: category_label}. An event, e.g. an EPL match, is
+    usually tagged with several labels of different specificity (e.g.
+    "FA Community Shield", "Sports", "Soccer") — this prefers a broad,
+    known top-level category (PREFERRED_CATEGORY_LABELS) over a narrow
+    one, so filter tabs stay small and useful. Falls back to whatever
+    the first returned tag is if none of the preferred labels are present.
     """
-    if not condition_ids:
+    if not event_ids:
         return {}
 
+    unique_ids = list(dict.fromkeys(str(e) for e in event_ids if e))
     categories: dict[str, str] = {}
-    # Gamma's /markets endpoint accepts a repeated condition_ids query param.
-    params = [("condition_ids", cid) for cid in condition_ids]
-    resp = requests.get(f"{GAMMA_API_BASE}/markets", params=params, timeout=15)
-    resp.raise_for_status()
 
-    for market in resp.json():
-        cid = market.get("conditionId")
-        if not cid:
-            continue
-        label = market.get("category")
-        if not label:
-            events = market.get("events") or []
-            if events:
-                tags = events[0].get("tags") or []
-                if tags:
-                    label = tags[0].get("label")
-        categories[cid] = label or "Uncategorized"
+    for event_id in unique_ids:
+        try:
+            resp = requests.get(f"{GAMMA_API_BASE}/events/{event_id}/tags", timeout=15)
+            resp.raise_for_status()
+            tags = resp.json() or []
+            labels = [t.get("label") for t in tags if isinstance(t, dict) and t.get("label")]
 
-    # Any condition_id Gamma didn't return anything for still gets a label.
-    for cid in condition_ids:
-        categories.setdefault(cid, "Uncategorized")
+            chosen = next((lbl for lbl in PREFERRED_CATEGORY_LABELS if lbl in labels), None)
+            categories[event_id] = chosen or (labels[0] if labels else "Uncategorized")
+        except requests.RequestException:
+            categories[event_id] = "Uncategorized"
+        time.sleep(0.05)
 
     return categories
 

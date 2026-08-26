@@ -8,7 +8,7 @@ import logging
 
 import requests
 
-from polymarket_api import fetch_leaderboard, fetch_positions, fetch_market_categories, polite_sleep
+from polymarket_api import fetch_leaderboard, fetch_positions, fetch_event_categories, polite_sleep
 from consensus_logic import parse_positions, compute_consensus, attach_categories, CONSENSUS_THRESHOLD
 from telegram_alert import send_telegram_alert, format_consensus_message
 
@@ -63,7 +63,7 @@ def run_once():
         return
 
     try:
-        category_map = fetch_market_categories([s.market_id for s in signals])
+        category_map = fetch_event_categories([s.event_id for s in signals])
         attach_categories(signals, category_map)
     except requests.RequestException as e:
         log.warning("Failed to fetch market categories (signals will be Uncategorized): %s", e)
