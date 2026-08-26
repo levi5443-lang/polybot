@@ -26,7 +26,7 @@ from fastapi.responses import FileResponse
 # allow importing the sibling modules (polymarket_api.py, consensus_logic.py)
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 
-from polymarket_api import fetch_leaderboard, fetch_positions, fetch_market_categories, polite_sleep  # noqa: E402
+from polymarket_api import fetch_leaderboard, fetch_positions, fetch_event_categories, polite_sleep  # noqa: E402
 from consensus_logic import parse_positions, compute_consensus, attach_categories, CONSENSUS_THRESHOLD  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -62,7 +62,7 @@ async def refresh_loop():
 
             try:
                 category_map = await asyncio.to_thread(
-                    fetch_market_categories, [s.market_id for s in signals]
+                    fetch_event_categories, [s.event_id for s in signals]
                 )
                 attach_categories(signals, category_map)
             except Exception as e:
