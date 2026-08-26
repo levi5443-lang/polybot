@@ -1,6 +1,9 @@
 """
 Polymarket Top-Trader Consensus Bot — alerting loop.
-Uses shared consensus_logic.py so the dashboard and this bot never drift apart.
+
+Tracks a SEPARATE top-10 leaderboard per category (Sports, Politics,
+Weather, Crypto, etc.), each drawn from within a wide overall candidate
+pool — see category_leaderboard.py for how that ranking is built.
 """
 
 import time
@@ -8,21 +11,24 @@ import logging
 
 import requests
 
-from polymarket_api import fetch_leaderboard, fetch_positions, fetch_event_categories, polite_sleep
-from consensus_logic import parse_positions, compute_consensus, attach_categories, CONSENSUS_THRESHOLD
+from category_leaderboard import (
+    build_category_data,
+    compute_category_consensus,
+    CANDIDATE_POOL_SIZE,
+    TOP_N_PER_CATEGORY,
+    CATEGORY_CONSENSUS_THRESHOLD,
+)
 from telegram_alert import send_telegram_alert, format_consensus_message
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger("consensus_bot")
 
-NUM_TOP_TRADERS = 20
 LEADERBOARD_PERIOD = "30d"    # "1d" | "7d" | "30d" | "all"
-POLL_INTERVAL_SECONDS = 300
+POLL_INTERVAL_SECONDS = 300   # a full pass over CANDIDATE_POOL_SIZE wallets takes longer
+                               # than the old 20-wallet version — leave headroom here
 PAPER_MODE = True
 
 # Only alert on these categories. Empty list = no filter (alert on everything).
-# Labels come straight from Polymarket's own tags, e.g.:
-# "Politics", "Sports", "Crypto", "Pop Culture", "Business", "Science"
 CATEGORY_FILTER: list[str] = []
 
 _alerted_keys: set[tuple] = set()
@@ -39,34 +45,23 @@ def execute_trade(signal):
 
 
 def run_once():
-    log.info("Fetching leaderboard (top %d, period=%s)...", NUM_TOP_TRADERS, LEADERBOARD_PERIOD)
+    log.info("Building per-category leaderboards (candidate pool=%d, top %d/category)...",
+              CANDIDATE_POOL_SIZE, TOP_N_PER_CATEGORY)
     try:
-        wallets = fetch_leaderboard(period=LEADERBOARD_PERIOD, limit=NUM_TOP_TRADERS)
+        data = build_category_data(period=LEADERBOARD_PERIOD)
     except requests.RequestException as e:
-        log.error("Failed to fetch leaderboard: %s", e)
+        log.error("Failed to build category data: %s", e)
         return
 
-    log.info("Tracking %d wallets.", len(wallets))
+    num_categories = len(data["category_top_wallets"])
+    log.info("Pulled %d candidate wallets, found %d categories.",
+              len(data["wallets"]), num_categories)
 
-    all_positions = []
-    for wallet in wallets:
-        try:
-            raw = fetch_positions(wallet)
-            all_positions.extend(parse_positions(wallet, raw))
-        except requests.RequestException as e:
-            log.warning("Failed to fetch positions for %s: %s", wallet, e)
-        polite_sleep(0.2)
-
-    signals = compute_consensus(all_positions, threshold=CONSENSUS_THRESHOLD)
+    signals = compute_category_consensus(data, threshold=CATEGORY_CONSENSUS_THRESHOLD)
     if not signals:
-        log.info("No consensus signals this pass (threshold=%d).", CONSENSUS_THRESHOLD)
+        log.info("No consensus signals this pass (threshold=%d per category).",
+                  CATEGORY_CONSENSUS_THRESHOLD)
         return
-
-    try:
-        category_map = fetch_event_categories([s.event_id for s in signals])
-        attach_categories(signals, category_map)
-    except requests.RequestException as e:
-        log.warning("Failed to fetch market categories (signals will be Uncategorized): %s", e)
 
     if CATEGORY_FILTER:
         before = len(signals)
@@ -76,13 +71,14 @@ def run_once():
             return
 
     for signal in sorted(signals, key=lambda s: s.count, reverse=True):
-        key = (signal.market_id, signal.outcome)
+        key = (signal.market_id, signal.outcome, signal.category)
+        top_wallets_in_cat = data["category_top_wallets"].get(signal.category, [])
         log.info("CONSENSUS [%s]: %d/%d on '%s' for '%s' ($%.0f)",
-                  signal.category, signal.count, len(wallets), signal.outcome, signal.market_question,
-                  signal.total_size_usd)
+                  signal.category, signal.count, len(top_wallets_in_cat),
+                  signal.outcome, signal.market_question, signal.total_size_usd)
 
         if key not in _alerted_keys:
-            send_telegram_alert(format_consensus_message(signal, len(wallets)))
+            send_telegram_alert(format_consensus_message(signal, len(top_wallets_in_cat)))
             _alerted_keys.add(key)
         else:
             log.info("(already alerted — skipping duplicate ping)")
@@ -91,8 +87,8 @@ def run_once():
 
 
 def run_forever():
-    log.info("Starting consensus bot. PAPER_MODE=%s, threshold=%d, poll=%ds, period=%s",
-              PAPER_MODE, CONSENSUS_THRESHOLD, POLL_INTERVAL_SECONDS, LEADERBOARD_PERIOD)
+    log.info("Starting consensus bot. PAPER_MODE=%s, category_threshold=%d, poll=%ds, period=%s",
+              PAPER_MODE, CATEGORY_CONSENSUS_THRESHOLD, POLL_INTERVAL_SECONDS, LEADERBOARD_PERIOD)
     while True:
         run_once()
         time.sleep(POLL_INTERVAL_SECONDS)
