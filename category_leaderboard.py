@@ -33,30 +33,30 @@ log = logging.getLogger("category_leaderboard")
 CANDIDATE_POOL_SIZE = 100   # how many wallets to pull from the global leaderboard first
 TOP_N_PER_CATEGORY = 10     # how many top wallets count as "the leaderboard" within a category
 
-# Threshold for a category-level consensus signal. Scaled down from the
-# original 5-of-20 (25%) global threshold to a comparable proportion of a
-# top-10 category list. Tune independently if 30% feels too loose/strict
-# for your categories.
-CATEGORY_CONSENSUS_THRESHOLD = 3
+# Categories to skip entirely — no leaderboard is built for these, no
+# signals will ever fire for them, and their positions don't count toward
+# any other category either.
+EXCLUDED_CATEGORIES = ["Crypto"]
+
+# Threshold for a category-level consensus signal (out of TOP_N_PER_CATEGORY).
+CATEGORY_CONSENSUS_THRESHOLD = 4
 
 
 def build_category_data(period: str = "30d") -> dict:
-    """
-    NOTE: this touches CANDIDATE_POOL_SIZE wallets one at a time (plus one
-    request per unique event afterward) — with the default of 100, that's
-    on the order of 150+ sequential network calls. It can easily take a
-    few minutes with NO output in between if you don't log progress, which
-    looks exactly like a hang even when it isn't. Progress lines below are
-    there specifically so you're never staring at a silent terminal.
-    """
     """Do the heavy lifting once per cycle: pull the candidate pool, their
     positions, categorize everything, and rank wallets within each category.
+
+    NOTE: this touches CANDIDATE_POOL_SIZE wallets one at a time (plus one
+    request per unique event afterward) — with the default of 100, that's
+    on the order of 150+ sequential network calls. Progress lines below
+    are there so a long pass doesn't look like a hang.
 
     Returns a dict with:
       - wallets: the full candidate pool (list of addresses)
       - all_positions: every candidate's positions (list of Position)
       - category_map: {event_id: category_label}
-      - category_top_wallets: {category: [wallet, ...]} (top N per category)
+      - category_top_wallets: {category: [wallet, ...]} (top N per category,
+        excluding anything in EXCLUDED_CATEGORIES)
     """
     wallets = fetch_leaderboard(period=period, limit=CANDIDATE_POOL_SIZE)
     log.info("Got %d candidate wallets. Fetching positions (this is the slow part)...", len(wallets))
@@ -77,10 +77,14 @@ def build_category_data(period: str = "30d") -> dict:
     category_map = fetch_event_categories(event_ids)
     log.info("Category lookup done.")
 
-    # Sum each wallet's position size within each category.
+    # Sum each wallet's position size within each category — skipping
+    # excluded categories entirely, so they never form a leaderboard and
+    # never produce a signal.
     wallet_category_size: dict = defaultdict(lambda: defaultdict(float))
     for p in all_positions:
         cat = category_map.get(p.event_id, "Uncategorized")
+        if cat in EXCLUDED_CATEGORIES:
+            continue
         wallet_category_size[p.wallet][cat] += p.size_usd
 
     # Rank wallets within each category, keep the top N.
