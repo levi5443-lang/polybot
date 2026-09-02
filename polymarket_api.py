@@ -21,7 +21,9 @@ GAMMA_API_BASE = "https://gamma-api.polymarket.com"
 # disk (not just in-memory) — that way every run after the first one, even
 # a brand-new `python consensus_bot.py` invocation, skips re-fetching
 # categories for events it's already seen.
-CATEGORY_CACHE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "category_cache.json")
+CACHE_DIR = os.environ.get("CACHE_DIR", os.path.dirname(os.path.abspath(__file__)))
+os.makedirs(CACHE_DIR, exist_ok=True)
+CATEGORY_CACHE_FILE = os.path.join(CACHE_DIR, "category_cache.json")
 
 
 def _load_category_cache() -> dict:
