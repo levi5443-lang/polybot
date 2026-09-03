@@ -18,6 +18,7 @@ class Position:
     outcome: str
     size_usd: float
     event_id: str = ""
+    token_id: str = ""
 
 
 @dataclass
@@ -29,6 +30,7 @@ class ConsensusSignal:
     total_size_usd: float = 0.0
     category: str = "Uncategorized"
     event_id: str = ""
+    token_id: str = ""
 
     @property
     def count(self) -> int:
@@ -87,6 +89,7 @@ def parse_positions(wallet: str, raw: list[dict], min_size: float = MIN_POSITION
             outcome=p.get("outcome", "unknown"),
             size_usd=size_usd,
             event_id=str(p.get("eventId") or ""),
+            token_id=str(p.get("asset") or ""),
         ))
     return out
 
@@ -97,7 +100,8 @@ def compute_consensus(all_positions: list[Position], threshold: int = CONSENSUS_
         key = (pos.market_id, pos.outcome)
         if key not in grouped:
             grouped[key] = ConsensusSignal(
-                pos.market_id, pos.market_question, pos.outcome, event_id=pos.event_id
+                pos.market_id, pos.market_question, pos.outcome,
+                event_id=pos.event_id, token_id=pos.token_id
             )
         signal = grouped[key]
         if pos.wallet not in signal.agreeing_wallets:

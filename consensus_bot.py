@@ -40,10 +40,47 @@ def execute_trade(signal):
     if PAPER_MODE:
         log.info("[PAPER TRADE] Would take '%s' on '%s' (%d agree, $%.0f)",
                   signal.outcome, signal.market_question, signal.count, signal.total_size_usd)
-    else:
-        raise NotImplementedError(
-            "Live execution not implemented — wire up py-clob-client + risk logic first."
-        )
+        return
+
+    # Real execution — imported lazily so paper mode never requires
+    # py-clob-client to be installed at all.
+    import risk_manager
+    import execution
+
+    if not signal.token_id:
+        log.error("No token_id available for '%s' [%s] — cannot place a real order, skipping.",
+                  signal.market_question, signal.outcome)
+        return
+
+    if risk_manager.daily_loss_cap_reached():
+        log.warning("Skipping trade on '%s' — daily loss cap already reached.", signal.market_question)
+        return
+
+    try:
+        balance = execution.get_wallet_balance_usd()
+    except Exception as e:
+        log.error("Could not fetch wallet balance, skipping trade: %s", e)
+        return
+
+    size_usd = risk_manager.get_position_size_usd(balance)
+    if size_usd < 1.0:
+        log.warning("Computed position size ($%.2f) is too small to trade, skipping.", size_usd)
+        return
+
+    log.info("LIVE TRADE: '%s' [%s] — sizing $%.2f (2%% of $%.2f balance)",
+              signal.market_question, signal.outcome, size_usd, balance)
+
+    try:
+        resp = execution.place_market_buy(signal.token_id, size_usd)
+    except Exception as e:
+        log.error("Order placement failed for '%s': %s", signal.market_question, e)
+        return
+
+    entry_price = resp.get("price", 0) if isinstance(resp, dict) else 0
+    risk_manager.record_trade_open(
+        signal.market_id, signal.market_question, signal.outcome,
+        size_usd, entry_price, signal.category
+    )
 
 
 def run_once():
