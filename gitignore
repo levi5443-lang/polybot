@@ -8,3 +8,4 @@ category_cache.json
 seen_events_cache.json
 trade_log.json
 digest_state.json
+wallet_records.json
