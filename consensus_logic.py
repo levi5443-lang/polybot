@@ -4,6 +4,7 @@ Used by both consensus_bot.py (alerting) and webapp/main.py (dashboard).
 """
 
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 
 MIN_POSITION_SIZE_USD = 100
 CONSENSUS_THRESHOLD = 5
@@ -45,13 +46,38 @@ class ConsensusSignal:
         }
 
 
+def _is_market_still_open(p: dict) -> bool:
+    """Positions in resolved/expired markets should never count as active
+    conviction, no matter what size the raw data reports. endDate is the
+    most direct signal for that."""
+    end_date = p.get("endDate")
+    if not end_date:
+        return True  # no date info — don't exclude on a guess
+    try:
+        end_dt = datetime.fromisoformat(str(end_date).replace("Z", "+00:00"))
+        if end_dt.tzinfo is None:
+            end_dt = end_dt.replace(tzinfo=timezone.utc)
+        return end_dt > datetime.now(timezone.utc)
+    except (ValueError, TypeError):
+        return True
+
+
 def parse_positions(wallet: str, raw: list[dict], min_size: float = MIN_POSITION_SIZE_USD) -> list[Position]:
     out = []
     for p in raw:
+        if not _is_market_still_open(p):
+            continue
+
+        # currentValue can be legitimately 0 (position resolved/worthless or
+        # already redeemed) — that must NOT fall back to the stale original
+        # "size" figure. Only fall back when the field is genuinely absent.
+        current_value = p.get("currentValue")
+        raw_value = current_value if current_value is not None else p.get("size", 0)
         try:
-            size_usd = float(p.get("currentValue") or p.get("size", 0))
+            size_usd = float(raw_value)
         except (TypeError, ValueError):
             size_usd = 0.0
+
         if size_usd < min_size:
             continue
         out.append(Position(
