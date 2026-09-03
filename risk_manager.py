@@ -58,8 +58,24 @@ def get_position_size_usd(wallet_balance_usd: float) -> float:
     return round(wallet_balance_usd * POSITION_SIZE_PCT, 2)
 
 
+def has_open_trade(market_id: str, outcome: str, mode: str = "live") -> bool:
+    """True if there's already an open ledger entry for this exact
+    market+outcome+mode. Prevents re-trading (or re-logging a paper trade
+    for) the same ongoing signal every single poll cycle."""
+    trades = _load_trade_log()
+    return any(
+        t["market_id"] == market_id and t["outcome"] == outcome
+        and t.get("mode", "live") == mode and t["status"] == "open"
+        for t in trades
+    )
+
+
 def record_trade_open(market_id: str, market_question: str, outcome: str,
-                       size_usd: float, entry_price: float, category: str) -> None:
+                       size_usd: float, entry_price: float, category: str,
+                       mode: str = "live", signal_type: str = "consensus") -> None:
+    """mode is 'live' (real money) or 'paper' (tracked for accuracy only,
+    no money moved). signal_type is 'consensus' or 'early_mover' — lets
+    accuracy be broken down by which kind of signal produced the trade."""
     trades = _load_trade_log()
     trades.append({
         "market_id": market_id,
@@ -68,13 +84,16 @@ def record_trade_open(market_id: str, market_question: str, outcome: str,
         "category": category,
         "size_usd": size_usd,
         "entry_price": entry_price,
+        "mode": mode,
+        "signal_type": signal_type,
         "opened_at": datetime.now(timezone.utc).isoformat(),
         "status": "open",
         "realized_pnl": None,
         "closed_at": None,
     })
     _save_trade_log(trades)
-    log.info("Recorded trade open: %s [%s] $%.2f @ %.3f", market_question, outcome, size_usd, entry_price)
+    log.info("Recorded %s trade open: %s [%s] $%.2f @ %.3f",
+              mode, market_question, outcome, size_usd, entry_price)
 
 
 def record_trade_closed(market_id: str, outcome: str, realized_pnl: float) -> None:
@@ -90,13 +109,16 @@ def record_trade_closed(market_id: str, outcome: str, realized_pnl: float) -> No
 
 
 def todays_realized_loss_usd() -> float:
-    """Sum of realized losses (negative P&L only) on trades closed today
-    (UTC calendar day). Wins don't offset this — the cap is specifically
-    about limiting how much can be LOST in a day, not net P&L."""
+    """Sum of realized LIVE losses (negative P&L only) on trades closed
+    today (UTC calendar day). Paper trades never count toward this — the
+    cap is about real money, not tracked accuracy. Wins don't offset this
+    either — the cap limits how much can be LOST in a day, not net P&L."""
     trades = _load_trade_log()
     today = datetime.now(timezone.utc).date()
     total_loss = 0.0
     for t in trades:
+        if t.get("mode", "live") != "live":
+            continue
         if t["status"] != "closed" or t["closed_at"] is None:
             continue
         closed_date = datetime.fromisoformat(t["closed_at"]).date()

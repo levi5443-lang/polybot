@@ -37,15 +37,33 @@ _alerted_early_mover_keys: set[tuple] = set()
 
 
 def execute_trade(signal):
+    import risk_manager
+
     if PAPER_MODE:
+        if risk_manager.has_open_trade(signal.market_id, signal.outcome, mode="paper"):
+            log.info("[PAPER TRADE] Already tracking '%s' [%s] — not re-logging.",
+                      signal.market_question, signal.outcome)
+            return
         log.info("[PAPER TRADE] Would take '%s' on '%s' (%d agree, $%.0f)",
                   signal.outcome, signal.market_question, signal.count, signal.total_size_usd)
+        # Paper trades are tracked at a fixed notional $1 "unit" — the
+        # accuracy math only cares whether the prediction was right, not
+        # a dollar amount, since no money actually moves in paper mode.
+        risk_manager.record_trade_open(
+            signal.market_id, signal.market_question, signal.outcome,
+            size_usd=1.0, entry_price=0, category=signal.category,
+            mode="paper", signal_type="consensus"
+        )
         return
 
     # Real execution — imported lazily so paper mode never requires
     # py-clob-client to be installed at all.
-    import risk_manager
     import execution
+
+    if risk_manager.has_open_trade(signal.market_id, signal.outcome, mode="live"):
+        log.info("Already have an open live position on '%s' [%s] — not placing another order.",
+                  signal.market_question, signal.outcome)
+        return
 
     if not signal.token_id:
         log.error("No token_id available for '%s' [%s] — cannot place a real order, skipping.",
@@ -98,6 +116,16 @@ def run_once():
 
     run_regular_consensus(data)
     run_early_movers(data)
+    run_accuracy_check()
+
+
+def run_accuracy_check():
+    import trade_tracker
+    resolved_count = trade_tracker.sync_resolved_trades()
+    if resolved_count:
+        log.info("Accuracy sync: %d trade(s) resolved this pass.", resolved_count)
+    log.info(trade_tracker.format_accuracy_summary(mode="paper"))
+    log.info(trade_tracker.format_accuracy_summary(mode="live"))
 
 
 def run_regular_consensus(data):
