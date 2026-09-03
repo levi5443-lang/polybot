@@ -152,6 +152,19 @@
   }
   .empty-state .mono { display: block; margin-top: 8px; font-size: 12px; opacity: 0.7; }
 
+  .early-mover-panel {
+    margin-top: 24px;
+    border-color: rgba(107, 158, 120, 0.35);
+  }
+  .early-mover-head {
+    color: var(--green);
+    letter-spacing: 0.04em;
+  }
+  .early-mover-panel .outcome-tag {
+    border-color: rgba(107, 158, 120, 0.5);
+    color: var(--green);
+  }
+
   .cat-filters { display: flex; gap: 6px; flex-wrap: wrap; }
   .cat-chip {
     font-family: 'IBM Plex Mono', monospace;
@@ -215,6 +228,26 @@
   <div class="empty-state" id="empty-state" style="display:none;">
     No markets currently cross the consensus threshold.
     <span class="mono">Signals appear here once enough tracked wallets agree on the same side.</span>
+  </div>
+</div>
+
+<div class="panel early-mover-panel">
+  <div class="panel-head early-mover-head">🚀 Early Movers — brand-new markets, multiple top traders already in</div>
+  <table id="early-mover-table">
+    <thead>
+      <tr>
+        <th style="width: 34%;">Market</th>
+        <th>Category</th>
+        <th>Side</th>
+        <th>Traders In</th>
+        <th style="text-align:right;">Aggregate size</th>
+      </tr>
+    </thead>
+    <tbody id="early-mover-rows"></tbody>
+  </table>
+  <div class="empty-state" id="early-mover-empty-state" style="display:none;">
+    No early movers this cycle.
+    <span class="mono">Appears when 2+ tracked traders are already positioned on a market that just showed up.</span>
   </div>
 </div>
 
@@ -296,6 +329,31 @@
     `).join('');
   }
 
+  function renderEarlyMovers() {
+    if (!latestData) return;
+    const rows = document.getElementById('early-mover-rows');
+    const emptyState = document.getElementById('early-mover-empty-state');
+
+    const movers = latestData.early_movers || [];
+
+    if (movers.length === 0) {
+      rows.innerHTML = '';
+      emptyState.style.display = 'block';
+      return;
+    }
+    emptyState.style.display = 'none';
+
+    rows.innerHTML = movers.map(s => `
+      <tr>
+        <td class="market-q">${escapeHtml(s.market_question)}</td>
+        <td class="category-cell">${escapeHtml(s.category || 'Uncategorized')}</td>
+        <td><span class="outcome-tag">${escapeHtml(s.outcome)}</span></td>
+        <td class="meter-count">${s.agree_count} trader${s.agree_count === 1 ? '' : 's'}</td>
+        <td style="text-align:right;" class="size">$${Number(s.total_size_usd).toLocaleString()}</td>
+      </tr>
+    `).join('');
+  }
+
   async function refresh() {
     try {
       const res = await fetch('/api/consensus');
@@ -324,6 +382,7 @@
 
       renderCategoryFilters(data.categories || []);
       renderTable();
+      renderEarlyMovers();
     } catch (e) {
       document.getElementById('status-dot').classList.add('stale');
       document.getElementById('status-text').textContent = 'disconnected';
