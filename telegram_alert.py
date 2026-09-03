@@ -59,8 +59,25 @@ def _format_rank_line(signal, wallet_ranks: dict = None, pool_size: int = None) 
     return f"Overall ranks{pool_note}: {ranks_str}\n"
 
 
+def _format_track_record_line(signal, wallet_ranks: dict = None, wallet_records: dict = None) -> str:
+    """e.g. 'Sports record: #3 (12-4, 75%) | #17 (new) | #44 (6-9, 40%)' —
+    each agreeing wallet's OWN accuracy history in this specific category,
+    not their overall profit rank. wallet_records is {wallet: record_str},
+    built by the caller via wallet_tracker.format_wallet_record()."""
+    if not wallet_ranks or not wallet_records:
+        return ""
+    wallets_sorted = sorted(
+        (w for w in signal.agreeing_wallets if w in wallet_ranks and w in wallet_records),
+        key=lambda w: wallet_ranks[w]
+    )
+    if not wallets_sorted:
+        return ""
+    parts = [f"#{wallet_ranks[w]} ({wallet_records[w]})" for w in wallets_sorted]
+    return f"{signal.category} record: " + " | ".join(parts) + "\n"
+
+
 def format_consensus_message(signal, total_tracked: int, wallet_ranks: dict = None,
-                              pool_size: int = None) -> str:
+                              pool_size: int = None, wallet_records: dict = None) -> str:
     """Build a readable alert message from a ConsensusSignal."""
     return (
         f"*Polymarket Consensus Signal*  _[{signal.category}]_\n\n"
@@ -68,11 +85,13 @@ def format_consensus_message(signal, total_tracked: int, wallet_ranks: dict = No
         f"Outcome: *{signal.outcome}*\n"
         f"Agreement: {signal.count}/{total_tracked} tracked top traders\n"
         f"{_format_rank_line(signal, wallet_ranks, pool_size)}"
+        f"{_format_track_record_line(signal, wallet_ranks, wallet_records)}"
         f"Aggregate size: ${signal.total_size_usd:,.0f}\n"
     )
 
 
-def format_early_mover_message(signal, wallet_ranks: dict = None, pool_size: int = None) -> str:
+def format_early_mover_message(signal, wallet_ranks: dict = None, pool_size: int = None,
+                                wallet_records: dict = None) -> str:
     """Build a distinctly-labeled alert for a brand-new market where
     multiple tracked wallets are already positioned. Deliberately doesn't
     show "X/total_tracked" like the regular consensus message — early
@@ -83,5 +102,6 @@ def format_early_mover_message(signal, wallet_ranks: dict = None, pool_size: int
         f"Side: *{signal.outcome}*\n"
         f"{signal.count} tracked top traders already in\n"
         f"{_format_rank_line(signal, wallet_ranks, pool_size)}"
+        f"{_format_track_record_line(signal, wallet_ranks, wallet_records)}"
         f"Aggregate size: ${signal.total_size_usd:,.0f}\n"
     )

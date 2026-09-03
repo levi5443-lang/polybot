@@ -121,11 +121,17 @@ def run_once():
 
 def run_accuracy_check():
     import trade_tracker
+    import wallet_tracker
+
     resolved_count = trade_tracker.sync_resolved_trades()
     if resolved_count:
         log.info("Accuracy sync: %d trade(s) resolved this pass.", resolved_count)
     log.info(trade_tracker.format_accuracy_summary(mode="paper"))
     log.info(trade_tracker.format_accuracy_summary(mode="live"))
+
+    wallet_resolved_count = wallet_tracker.sync_wallet_resolutions()
+    if wallet_resolved_count:
+        log.info("Wallet tracker: %d tracked wallet position(s) resolved this pass.", wallet_resolved_count)
 
     sent = trade_tracker.maybe_send_daily_digest(send_telegram_alert)
     if sent:
@@ -154,9 +160,15 @@ def run_regular_consensus(data):
                   signal.outcome, signal.market_question, signal.total_size_usd)
 
         if key not in _alerted_keys:
+            import wallet_tracker
+            wallet_records = {
+                w: wallet_tracker.format_wallet_record(w, signal.category)
+                for w in signal.agreeing_wallets
+            }
             send_telegram_alert(format_consensus_message(
                 signal, len(top_wallets_in_cat),
-                wallet_ranks=data["wallet_overall_rank"], pool_size=len(data["wallets"])
+                wallet_ranks=data["wallet_overall_rank"], pool_size=len(data["wallets"]),
+                wallet_records=wallet_records
             ))
             _alerted_keys.add(key)
         else:
@@ -185,8 +197,14 @@ def run_early_movers(data):
                   signal.total_size_usd)
 
         if key not in _alerted_early_mover_keys:
+            import wallet_tracker
+            wallet_records = {
+                w: wallet_tracker.format_wallet_record(w, signal.category)
+                for w in signal.agreeing_wallets
+            }
             send_telegram_alert(format_early_mover_message(
-                signal, wallet_ranks=data["wallet_overall_rank"], pool_size=len(data["wallets"])
+                signal, wallet_ranks=data["wallet_overall_rank"], pool_size=len(data["wallets"]),
+                wallet_records=wallet_records
             ))
             _alerted_early_mover_keys.add(key)
         else:

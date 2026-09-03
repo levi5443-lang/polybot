@@ -27,6 +27,7 @@ import logging
 
 from polymarket_api import fetch_leaderboard, fetch_positions, fetch_event_categories, polite_sleep
 from consensus_logic import parse_positions, compute_consensus
+import wallet_tracker
 
 log = logging.getLogger("category_leaderboard")
 
@@ -76,6 +77,12 @@ def build_category_data(period: str = "30d") -> dict:
     log.info("Found %d unique events across all positions. Looking up categories...", len(event_ids))
     category_map = fetch_event_categories(event_ids)
     log.info("Category lookup done.")
+
+    # Track every candidate wallet's position, in every category — including
+    # excluded ones (EXCLUDED_CATEGORIES only controls which categories can
+    # produce trading SIGNALS, not which wallets/positions get tracked for
+    # accuracy purposes).
+    wallet_tracker.record_observed_positions(all_positions, category_map)
 
     # Sum each wallet's position size within each category — skipping
     # excluded categories entirely, so they never form a leaderboard and
