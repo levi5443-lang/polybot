@@ -127,6 +127,10 @@ def run_accuracy_check():
     log.info(trade_tracker.format_accuracy_summary(mode="paper"))
     log.info(trade_tracker.format_accuracy_summary(mode="live"))
 
+    sent = trade_tracker.maybe_send_daily_digest(send_telegram_alert)
+    if sent:
+        log.info("Sent daily accuracy digest to Telegram.")
+
 
 def run_regular_consensus(data):
     signals = compute_category_consensus(data, threshold=CATEGORY_CONSENSUS_THRESHOLD)

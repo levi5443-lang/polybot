@@ -9,6 +9,8 @@ track record from paper trades BEFORE ever risking money — you'll have
 real win-rate numbers to look at, not just a hope that the strategy works.
 """
 
+import json
+import os
 import logging
 
 from polymarket_api import fetch_resolved_markets
@@ -16,6 +18,8 @@ from risk_manager import _load_trade_log, _save_trade_log
 from datetime import datetime, timezone
 
 log = logging.getLogger("trade_tracker")
+
+DIGEST_STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "digest_state.json")
 
 
 def sync_resolved_trades(lookback_markets: int = 200) -> int:
@@ -110,3 +114,71 @@ def format_accuracy_summary(mode: str = "paper") -> str:
         return f"[{mode}] No resolved trades yet — nothing to measure accuracy from."
     return (f"[{mode}] Accuracy: {stats['wins']}/{stats['total_closed']} correct "
             f"({stats['win_rate_pct']}%)")
+
+
+def format_daily_digest_message() -> str:
+    """A single Telegram-ready message summarizing accuracy across both
+    paper and live trades, plus a breakdown by category for whichever
+    mode has more data (paper, until live trading actually starts)."""
+    paper = get_accuracy(mode="paper")
+    live = get_accuracy(mode="live")
+
+    lines = ["📊 *Daily Accuracy Digest*\n"]
+
+    if paper["total_closed"] > 0:
+        lines.append(f"Paper: {paper['wins']}/{paper['total_closed']} correct "
+                      f"({paper['win_rate_pct']}%)")
+    else:
+        lines.append("Paper: no resolved trades yet")
+
+    if live["total_closed"] > 0:
+        lines.append(f"Live: {live['wins']}/{live['total_closed']} correct "
+                      f"({live['win_rate_pct']}%)")
+    else:
+        lines.append("Live: no resolved trades yet")
+
+    trades = _load_trade_log()
+    open_count = sum(1 for t in trades if t["status"] == "open")
+    lines.append(f"\nCurrently open: {open_count} trade(s) awaiting resolution")
+
+    return "\n".join(lines)
+
+
+def _load_digest_state() -> dict:
+    if os.path.exists(DIGEST_STATE_FILE):
+        try:
+            with open(DIGEST_STATE_FILE, "r") as f:
+                return json.load(f)
+        except (json.JSONDecodeError, OSError):
+            return {}
+    return {}
+
+
+def _save_digest_state(state: dict) -> None:
+    try:
+        with open(DIGEST_STATE_FILE, "w") as f:
+            json.dump(state, f)
+    except OSError as e:
+        log.error("Could not save digest state: %s", e)
+
+
+def maybe_send_daily_digest(send_fn) -> bool:
+    """Sends the daily digest at most once per UTC calendar day, regardless
+    of how many poll cycles run in that day. send_fn is a callable taking
+    the message string (e.g. telegram_alert.send_telegram_alert) — passed
+    in rather than imported directly so this stays easy to test.
+
+    Returns True if a digest was actually sent this call.
+    """
+    today = datetime.now(timezone.utc).date().isoformat()
+    state = _load_digest_state()
+
+    if state.get("last_sent_date") == today:
+        return False  # already sent today
+
+    message = format_daily_digest_message()
+    send_fn(message)
+    state["last_sent_date"] = today
+    _save_digest_state(state)
+    log.info("Daily digest sent.")
+    return True
