@@ -33,7 +33,9 @@ log = logging.getLogger("early_movers")
 MIN_EARLY_MOVERS = 2
 NEWEST_EVENTS_TO_CHECK = 100  # how many of Polymarket's newest events to look at each cycle
 
-SEEN_EVENTS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "seen_events_cache.json")
+from storage_paths import persistent_path
+
+SEEN_EVENTS_FILE = persistent_path("seen_events_cache.json")
 
 
 def _load_seen_events() -> set:

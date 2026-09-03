@@ -19,7 +19,9 @@ from datetime import datetime, timezone
 
 log = logging.getLogger("trade_tracker")
 
-DIGEST_STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "digest_state.json")
+from storage_paths import persistent_path
+
+DIGEST_STATE_FILE = persistent_path("digest_state.json")
 
 
 def sync_resolved_trades(lookback_markets: int = 200) -> int:

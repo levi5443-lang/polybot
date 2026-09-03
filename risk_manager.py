@@ -30,7 +30,9 @@ log = logging.getLogger("risk_manager")
 POSITION_SIZE_PCT = 0.02      # 2% of wallet balance per trade
 DAILY_LOSS_CAP_USD = 100.0    # stop opening new trades once today's realized losses hit this
 
-TRADE_LOG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "trade_log.json")
+from storage_paths import persistent_path
+
+TRADE_LOG_FILE = persistent_path("trade_log.json")
 
 
 def _load_trade_log() -> list[dict]:
