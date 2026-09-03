@@ -44,18 +44,35 @@ def send_telegram_alert(message: str, bot_token: str = None, chat_id: str = None
         return False
 
 
-def format_consensus_message(signal, total_tracked: int) -> str:
+def _format_rank_line(signal, wallet_ranks: dict = None, pool_size: int = None) -> str:
+    """e.g. 'Overall ranks (of 50 tracked): #3, #7, #22, #41' — shows where
+    the specific agreeing wallets sit in the full candidate pool, not just
+    how many agreed. #3 and #7 agreeing is a very different signal than
+    #3 and #91 agreeing, even though both are "2 traders"."""
+    if not wallet_ranks:
+        return ""
+    ranks = sorted(wallet_ranks[w] for w in signal.agreeing_wallets if w in wallet_ranks)
+    if not ranks:
+        return ""
+    ranks_str = ", ".join(f"#{r}" for r in ranks)
+    pool_note = f" (of {pool_size} tracked)" if pool_size else ""
+    return f"Overall ranks{pool_note}: {ranks_str}\n"
+
+
+def format_consensus_message(signal, total_tracked: int, wallet_ranks: dict = None,
+                              pool_size: int = None) -> str:
     """Build a readable alert message from a ConsensusSignal."""
     return (
         f"*Polymarket Consensus Signal*  _[{signal.category}]_\n\n"
         f"Market: {signal.market_question}\n"
         f"Outcome: *{signal.outcome}*\n"
         f"Agreement: {signal.count}/{total_tracked} tracked top traders\n"
+        f"{_format_rank_line(signal, wallet_ranks, pool_size)}"
         f"Aggregate size: ${signal.total_size_usd:,.0f}\n"
     )
 
 
-def format_early_mover_message(signal) -> str:
+def format_early_mover_message(signal, wallet_ranks: dict = None, pool_size: int = None) -> str:
     """Build a distinctly-labeled alert for a brand-new market where
     multiple tracked wallets are already positioned. Deliberately doesn't
     show "X/total_tracked" like the regular consensus message — early
@@ -65,5 +82,6 @@ def format_early_mover_message(signal) -> str:
         f"Brand-new market: {signal.market_question}\n"
         f"Side: *{signal.outcome}*\n"
         f"{signal.count} tracked top traders already in\n"
+        f"{_format_rank_line(signal, wallet_ranks, pool_size)}"
         f"Aggregate size: ${signal.total_size_usd:,.0f}\n"
     )

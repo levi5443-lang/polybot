@@ -154,7 +154,10 @@ def run_regular_consensus(data):
                   signal.outcome, signal.market_question, signal.total_size_usd)
 
         if key not in _alerted_keys:
-            send_telegram_alert(format_consensus_message(signal, len(top_wallets_in_cat)))
+            send_telegram_alert(format_consensus_message(
+                signal, len(top_wallets_in_cat),
+                wallet_ranks=data["wallet_overall_rank"], pool_size=len(data["wallets"])
+            ))
             _alerted_keys.add(key)
         else:
             log.info("(already alerted — skipping duplicate ping)")
@@ -182,7 +185,9 @@ def run_early_movers(data):
                   signal.total_size_usd)
 
         if key not in _alerted_early_mover_keys:
-            send_telegram_alert(format_early_mover_message(signal))
+            send_telegram_alert(format_early_mover_message(
+                signal, wallet_ranks=data["wallet_overall_rank"], pool_size=len(data["wallets"])
+            ))
             _alerted_early_mover_keys.add(key)
         else:
             log.info("(already alerted — skipping duplicate ping)")
