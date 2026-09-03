@@ -33,6 +33,7 @@ from category_leaderboard import (  # noqa: E402
     TOP_N_PER_CATEGORY,
     CATEGORY_CONSENSUS_THRESHOLD,
 )
+from early_movers import find_early_movers  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger("dashboard")
@@ -46,6 +47,7 @@ _cache = {
     "updated_at": None,
     "tracked_wallets": 0,
     "signals": [],
+    "early_movers": [],
     "categories": [],
     "error": None,
 }
@@ -67,13 +69,23 @@ async def refresh_loop():
                 cat_wallet_count = len(data["category_top_wallets"].get(s.category, []))
                 signal_dicts.append(s.to_dict(cat_wallet_count))
 
+            early_mover_signals = await asyncio.to_thread(
+                find_early_movers, data["all_positions"], data["category_map"]
+            )
+            early_mover_signals.sort(key=lambda s: s.count, reverse=True)
+            # Early movers aren't measured against a category leaderboard
+            # size — total_tracked here is just the count who moved.
+            early_mover_dicts = [s.to_dict(s.count) for s in early_mover_signals]
+
             _cache["updated_at"] = time.time()
             _cache["tracked_wallets"] = len(data["wallets"])
             _cache["signals"] = signal_dicts
+            _cache["early_movers"] = early_mover_dicts
             _cache["categories"] = sorted(data["category_top_wallets"].keys())
             _cache["error"] = None
-            log.info("Refreshed: %d candidate wallets, %d categories, %d signals",
-                      len(data["wallets"]), len(data["category_top_wallets"]), len(signals))
+            log.info("Refreshed: %d candidate wallets, %d categories, %d signals, %d early movers",
+                      len(data["wallets"]), len(data["category_top_wallets"]), len(signals),
+                      len(early_mover_signals))
         except Exception as e:
             log.error("Refresh failed: %s", e)
             _cache["error"] = str(e)
