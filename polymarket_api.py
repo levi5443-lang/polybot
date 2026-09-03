@@ -21,9 +21,7 @@ GAMMA_API_BASE = "https://gamma-api.polymarket.com"
 # disk (not just in-memory) — that way every run after the first one, even
 # a brand-new `python consensus_bot.py` invocation, skips re-fetching
 # categories for events it's already seen.
-CACHE_DIR = os.environ.get("CACHE_DIR", os.path.dirname(os.path.abspath(__file__)))
-os.makedirs(CACHE_DIR, exist_ok=True)
-CATEGORY_CACHE_FILE = os.path.join(CACHE_DIR, "category_cache.json")
+CATEGORY_CACHE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "category_cache.json")
 
 
 def _load_category_cache() -> dict:
@@ -44,52 +42,18 @@ def _save_category_cache(cache: dict) -> None:
         pass  # caching is a nice-to-have — never let a write failure be fatal  # market metadata / resolutions
 
 
-# The Data API's actual query params (per docs.polymarket.com/api-reference/
-# core/get-trader-leaderboard-rankings) are timePeriod (DAY|WEEK|MONTH|ALL),
-# orderBy (PNL|VOL, default PNL), limit (max 50 per call), and offset — NOT
-# the plain "period"/"limit" this used to send. Those were silently ignored,
-# which meant two things were quietly broken: LEADERBOARD_PERIOD never
-# actually took effect (ranking always fell back to the API's DAY default),
-# and CANDIDATE_POOL_SIZE=100 was always being truncated to 50 by the API's
-# per-call cap — which is exactly why the deployed bot's logs say "Got 50
-# candidate wallets" even though 100 was requested.
-_TIME_PERIOD_MAP = {"1d": "DAY", "7d": "WEEK", "30d": "MONTH", "all": "ALL"}
-_LEADERBOARD_PAGE_SIZE = 50
-
-
 def fetch_leaderboard(period: str = "30d", limit: int = 20) -> list[str]:
-    """Top wallets by profit (PnL) for the given period ('1d'|'7d'|'30d'|'all').
-
-    Explicitly ranks by PnL (orderBy=PNL) rather than trusting the API's
-    default — a high-volume wallet can still be a net loser, and "top
-    trader" should mean winning, not just active. Pages through results in
-    batches of 50 (the API's per-call max) so a `limit` above that, like
-    CANDIDATE_POOL_SIZE, is actually honored instead of silently capped.
-    """
-    time_period = _TIME_PERIOD_MAP.get(period, "MONTH")
-    wallets: list[str] = []
-    offset = 0
-    while len(wallets) < limit:
-        page_limit = min(_LEADERBOARD_PAGE_SIZE, limit - len(wallets))
-        resp = requests.get(
-            f"{DATA_API_BASE}/v1/leaderboard",
-            params={
-                "timePeriod": time_period,
-                "orderBy": "PNL",
-                "limit": page_limit,
-                "offset": offset,
-            },
-            timeout=15,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        if not data:
-            break  # fewer wallets exist than requested — nothing more to page in
-        for entry in data:
-            wallet = entry.get("proxyWallet") or entry.get("wallet") or entry.get("address")
-            if wallet:
-                wallets.append(wallet)
-        offset += page_limit
+    """Top wallets by PnL/volume for the given period ('1d'|'7d'|'30d'|'all')."""
+    resp = requests.get(
+        f"{DATA_API_BASE}/v1/leaderboard", params={"period": period, "limit": limit}, timeout=15
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    wallets = []
+    for entry in data:
+        wallet = entry.get("proxyWallet") or entry.get("wallet") or entry.get("address")
+        if wallet:
+            wallets.append(wallet)
     return wallets[:limit]
 
 
@@ -184,6 +148,19 @@ def fetch_event_categories(event_ids: list[str]) -> dict[str, str]:
         _save_category_cache(cache)
 
     return categories
+
+
+def fetch_newest_events(limit: int = 100) -> list[dict]:
+    """The newest active events on Polymarket, sorted newest-first, each
+    including its markets (with conditionId) — used to detect brand-new
+    markets that appeared since the last check."""
+    resp = requests.get(
+        f"{GAMMA_API_BASE}/events",
+        params={"order": "id", "ascending": "false", "active": "true", "closed": "false", "limit": limit},
+        timeout=15,
+    )
+    resp.raise_for_status()
+    return resp.json()
 
 
 def polite_sleep(seconds: float = 0.2):

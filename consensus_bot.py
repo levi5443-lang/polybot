@@ -18,7 +18,8 @@ from category_leaderboard import (
     TOP_N_PER_CATEGORY,
     CATEGORY_CONSENSUS_THRESHOLD,
 )
-from telegram_alert import send_telegram_alert, format_consensus_message
+from early_movers import find_early_movers, MIN_EARLY_MOVERS
+from telegram_alert import send_telegram_alert, format_consensus_message, format_early_mover_message
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger("consensus_bot")
@@ -32,6 +33,7 @@ PAPER_MODE = True
 CATEGORY_FILTER: list[str] = []
 
 _alerted_keys: set[tuple] = set()
+_alerted_early_mover_keys: set[tuple] = set()
 
 
 def execute_trade(signal):
@@ -57,6 +59,11 @@ def run_once():
     log.info("Pulled %d candidate wallets, found %d categories.",
               len(data["wallets"]), num_categories)
 
+    run_regular_consensus(data)
+    run_early_movers(data)
+
+
+def run_regular_consensus(data):
     signals = compute_category_consensus(data, threshold=CATEGORY_CONSENSUS_THRESHOLD)
     if not signals:
         log.info("No consensus signals this pass (threshold=%d per category).",
@@ -86,6 +93,32 @@ def run_once():
         execute_trade(signal)
 
 
+def run_early_movers(data):
+    signals = find_early_movers(data["all_positions"], data["category_map"])
+    if not signals:
+        log.info("No early-mover signals this pass (threshold=%d).", MIN_EARLY_MOVERS)
+        return
+
+    if CATEGORY_FILTER:
+        before = len(signals)
+        signals = [s for s in signals if s.category in CATEGORY_FILTER]
+        log.info("Early movers — category filter %s: %d/%d kept.", CATEGORY_FILTER, len(signals), before)
+        if not signals:
+            return
+
+    for signal in sorted(signals, key=lambda s: s.count, reverse=True):
+        key = (signal.market_id, signal.outcome, signal.category)
+        log.info("EARLY MOVER [%s]: %d tracked traders already in '%s' for '%s' ($%.0f)",
+                  signal.category, signal.count, signal.outcome, signal.market_question,
+                  signal.total_size_usd)
+
+        if key not in _alerted_early_mover_keys:
+            send_telegram_alert(format_early_mover_message(signal))
+            _alerted_early_mover_keys.add(key)
+        else:
+            log.info("(already alerted — skipping duplicate ping)")
+
+
 def run_forever():
     log.info("Starting consensus bot. PAPER_MODE=%s, category_threshold=%d, poll=%ds, period=%s",
               PAPER_MODE, CATEGORY_CONSENSUS_THRESHOLD, POLL_INTERVAL_SECONDS, LEADERBOARD_PERIOD)
@@ -95,4 +128,4 @@ def run_forever():
 
 
 if __name__ == "__main__":
-    run_forever()
+    run_once()

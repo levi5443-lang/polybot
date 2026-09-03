@@ -53,3 +53,17 @@ def format_consensus_message(signal, total_tracked: int) -> str:
         f"Agreement: {signal.count}/{total_tracked} tracked top traders\n"
         f"Aggregate size: ${signal.total_size_usd:,.0f}\n"
     )
+
+
+def format_early_mover_message(signal) -> str:
+    """Build a distinctly-labeled alert for a brand-new market where
+    multiple tracked wallets are already positioned. Deliberately doesn't
+    show "X/total_tracked" like the regular consensus message — early
+    movers are about a market being new, not about a leaderboard size."""
+    return (
+        f"🚀 *EARLY MOVER*  _[{signal.category}]_\n\n"
+        f"Brand-new market: {signal.market_question}\n"
+        f"Side: *{signal.outcome}*\n"
+        f"{signal.count} tracked top traders already in\n"
+        f"Aggregate size: ${signal.total_size_usd:,.0f}\n"
+    )
