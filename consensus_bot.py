@@ -19,7 +19,11 @@ from category_leaderboard import (
     CATEGORY_CONSENSUS_THRESHOLD,
 )
 from early_movers import find_early_movers, MIN_EARLY_MOVERS
-from telegram_alert import send_telegram_alert, format_consensus_message, format_early_mover_message
+from elite_movers import find_elite_moves, TOP_N_ELITE
+from telegram_alert import (
+    send_telegram_alert, format_consensus_message, format_early_mover_message,
+    format_elite_mover_message,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger("consensus_bot")
@@ -116,6 +120,7 @@ def run_once():
 
     run_regular_consensus(data)
     run_early_movers(data)
+    run_elite_movers(data)
     run_accuracy_check()
 
 
@@ -209,6 +214,36 @@ def run_early_movers(data):
             _alerted_early_mover_keys.add(key)
         else:
             log.info("(already alerted — skipping duplicate ping)")
+
+
+def run_elite_movers(data):
+    """No threshold, no agreement needed — a SINGLE top-5 overall-ranked
+    trader taking any new position is worth an alert on its own. Since
+    this only ever looks at data["newly_observed_positions"] (positions
+    that were, this exact cycle, confirmed new to wallet_tracker's
+    ledger), there's no need for a separate dedup set here — a given
+    position can only ever appear as "newly observed" once, ever."""
+    moves = find_elite_moves(data)
+    if not moves:
+        log.info("No elite-trader moves this pass (top %d).", TOP_N_ELITE)
+        return
+
+    if CATEGORY_FILTER:
+        before = len(moves)
+        moves = [m for m in moves if m["category"] in CATEGORY_FILTER]
+        log.info("Elite movers — category filter %s: %d/%d kept.", CATEGORY_FILTER, len(moves), before)
+        if not moves:
+            return
+
+    import wallet_tracker
+    for move in moves:
+        log.info("ELITE MOVE [%s]: #%d trader took '%s' on '%s' ($%.0f)",
+                  move["category"], move["rank"], move["outcome"], move["market_question"],
+                  move["size_usd"])
+        record_str = wallet_tracker.format_wallet_record(move["wallet"], move["category"])
+        send_telegram_alert(format_elite_mover_message(
+            move, pool_size=len(data["wallets"]), record_str=record_str
+        ))
 
 
 def run_forever():

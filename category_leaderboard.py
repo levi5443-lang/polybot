@@ -82,7 +82,7 @@ def build_category_data(period: str = "30d") -> dict:
     # excluded ones (EXCLUDED_CATEGORIES only controls which categories can
     # produce trading SIGNALS, not which wallets/positions get tracked for
     # accuracy purposes).
-    wallet_tracker.record_observed_positions(all_positions, category_map)
+    newly_observed_positions = wallet_tracker.record_observed_positions(all_positions, category_map)
 
     # Sum each wallet's position size within each category — skipping
     # excluded categories entirely, so they never form a leaderboard and
@@ -118,6 +118,7 @@ def build_category_data(period: str = "30d") -> dict:
         "category_map": category_map,
         "category_top_wallets": category_top_wallets,
         "wallet_overall_rank": wallet_overall_rank,
+        "newly_observed_positions": newly_observed_positions,
     }
 
 

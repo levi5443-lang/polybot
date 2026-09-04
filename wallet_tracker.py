@@ -42,12 +42,14 @@ def _record_key(wallet: str, market_id: str, outcome: str) -> str:
     return f"{wallet}|{market_id}|{outcome}"
 
 
-def record_observed_positions(all_positions: list[Position], category_map: dict) -> int:
-    """Log every candidate wallet's current positions. Returns how many
-    genuinely new positions got logged (already-known ones are skipped —
-    this is safe to call every cycle without creating duplicates)."""
+def record_observed_positions(all_positions: list[Position], category_map: dict) -> list[Position]:
+    """Log every candidate wallet's current positions. Returns the
+    genuinely NEW positions logged this cycle (already-known ones are
+    skipped — safe to call every cycle without duplicates). Returning the
+    actual positions, not just a count, is what lets callers build
+    per-wallet alerts (e.g. "a top-5 trader just took a new position")."""
     records = _load_records()
-    new_count = 0
+    new_positions = []
 
     for p in all_positions:
         key = _record_key(p.wallet, p.market_id, p.outcome)
@@ -67,13 +69,13 @@ def record_observed_positions(all_positions: list[Position], category_map: dict)
             "correct": None,
             "resolved_at": None,
         }
-        new_count += 1
+        new_positions.append(p)
 
-    if new_count:
+    if new_positions:
         _save_records(records)
-        log.info("Wallet tracker: logged %d newly-observed position(s).", new_count)
+        log.info("Wallet tracker: logged %d newly-observed position(s).", len(new_positions))
 
-    return new_count
+    return new_positions
 
 
 def sync_wallet_resolutions() -> int:
