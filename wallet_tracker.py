@@ -137,11 +137,13 @@ def get_wallet_category_record(wallet: str, category: str) -> dict:
 
 
 def format_wallet_record(wallet: str, category: str) -> str:
-    """Short display string for a Telegram message, e.g. '12-4, 75%',
-    'new' (zero resolved), or '3 resolved, too early' (below MIN_SAMPLE_SIZE)."""
+    """Short display string for a Telegram message, e.g. '12-4, 75%'
+    (confident sample), '1-0, 100% (early)' (below MIN_SAMPLE_SIZE — real
+    number, just flagged as not yet statistically meaningful), or 'new'
+    (zero resolved — genuinely nothing to show yet)."""
     rec = get_wallet_category_record(wallet, category)
     if rec["total_resolved"] == 0:
         return "new"
     if rec["total_resolved"] < MIN_SAMPLE_SIZE:
-        return f"{rec['total_resolved']} resolved, too early"
+        return f"{rec['wins']}-{rec['losses']}, {rec['win_rate_pct']}% (early)"
     return f"{rec['wins']}-{rec['losses']}, {rec['win_rate_pct']}%"
