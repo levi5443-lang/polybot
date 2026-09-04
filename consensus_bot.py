@@ -41,68 +41,51 @@ _alerted_early_mover_keys: set[tuple] = set()
 
 
 def execute_trade(signal):
+    """PAPER MODE ONLY. Live signals never call this — see
+    request_live_trade() below, which routes them through
+    trade_approval.py's Telegram approve/reject flow instead, since real
+    money should never move without your explicit tap."""
     import risk_manager
 
-    if PAPER_MODE:
-        if risk_manager.has_open_trade(signal.market_id, signal.outcome, mode="paper"):
-            log.info("[PAPER TRADE] Already tracking '%s' [%s] — not re-logging.",
-                      signal.market_question, signal.outcome)
-            return
-        log.info("[PAPER TRADE] Would take '%s' on '%s' (%d agree, $%.0f)",
-                  signal.outcome, signal.market_question, signal.count, signal.total_size_usd)
-        # Paper trades are tracked at a fixed notional $1 "unit" — the
-        # accuracy math only cares whether the prediction was right, not
-        # a dollar amount, since no money actually moves in paper mode.
-        risk_manager.record_trade_open(
-            signal.market_id, signal.market_question, signal.outcome,
-            size_usd=1.0, entry_price=0, category=signal.category,
-            mode="paper", signal_type="consensus"
-        )
+    if risk_manager.has_open_trade(signal.market_id, signal.outcome, mode="paper"):
+        log.info("[PAPER TRADE] Already tracking '%s' [%s] — not re-logging.",
+                  signal.market_question, signal.outcome)
         return
+    log.info("[PAPER TRADE] Would take '%s' on '%s' (%d agree, $%.0f)",
+              signal.outcome, signal.market_question, signal.count, signal.total_size_usd)
+    # Paper trades are tracked at a fixed notional $1 "unit" — the
+    # accuracy math only cares whether the prediction was right, not
+    # a dollar amount, since no money actually moves in paper mode.
+    risk_manager.record_trade_open(
+        signal.market_id, signal.market_question, signal.outcome,
+        size_usd=1.0, entry_price=0, category=signal.category,
+        mode="paper", signal_type="consensus"
+    )
 
-    # Real execution — imported lazily so paper mode never requires
-    # py-clob-client to be installed at all.
-    import execution
+
+def request_live_trade(signal):
+    """LIVE MODE ONLY. Asks for approval via Telegram instead of trading
+    immediately — see trade_approval.py for the actual approve/reject
+    handling, which happens on a later cycle once you respond."""
+    import risk_manager
+    import trade_approval
 
     if risk_manager.has_open_trade(signal.market_id, signal.outcome, mode="live"):
-        log.info("Already have an open live position on '%s' [%s] — not placing another order.",
+        log.info("Already have an open live position on '%s' [%s] — skipping.",
                   signal.market_question, signal.outcome)
         return
 
     if not signal.token_id:
-        log.error("No token_id available for '%s' [%s] — cannot place a real order, skipping.",
+        log.error("No token_id available for '%s' [%s] — cannot request approval.",
                   signal.market_question, signal.outcome)
         return
 
-    if risk_manager.daily_loss_cap_reached():
-        log.warning("Skipping trade on '%s' — daily loss cap already reached.", signal.market_question)
+    if trade_approval.has_pending_approval(signal.market_id, signal.outcome):
+        log.info("Already have a pending approval request for '%s' [%s] — not asking again.",
+                  signal.market_question, signal.outcome)
         return
 
-    try:
-        balance = execution.get_wallet_balance_usd()
-    except Exception as e:
-        log.error("Could not fetch wallet balance, skipping trade: %s", e)
-        return
-
-    size_usd = risk_manager.get_position_size_usd(balance)
-    if size_usd < 1.0:
-        log.warning("Computed position size ($%.2f) is too small to trade, skipping.", size_usd)
-        return
-
-    log.info("LIVE TRADE: '%s' [%s] — sizing $%.2f (2%% of $%.2f balance)",
-              signal.market_question, signal.outcome, size_usd, balance)
-
-    try:
-        resp = execution.place_market_buy(signal.token_id, size_usd)
-    except Exception as e:
-        log.error("Order placement failed for '%s': %s", signal.market_question, e)
-        return
-
-    entry_price = resp.get("price", 0) if isinstance(resp, dict) else 0
-    risk_manager.record_trade_open(
-        signal.market_id, signal.market_question, signal.outcome,
-        size_usd, entry_price, signal.category
-    )
+    trade_approval.request_trade_approval(signal)
 
 
 def run_once():
@@ -117,6 +100,10 @@ def run_once():
     num_categories = len(data["category_top_wallets"])
     log.info("Pulled %d candidate wallets, found %d categories.",
               len(data["wallets"]), num_categories)
+
+    if not PAPER_MODE:
+        import trade_approval
+        trade_approval.process_pending_approvals()
 
     run_regular_consensus(data)
     run_early_movers(data)
@@ -179,7 +166,10 @@ def run_regular_consensus(data):
         else:
             log.info("(already alerted — skipping duplicate ping)")
 
-        execute_trade(signal)
+        if PAPER_MODE:
+            execute_trade(signal)
+        else:
+            request_live_trade(signal)
 
 
 def run_early_movers(data):

@@ -44,6 +44,81 @@ def send_telegram_alert(message: str, bot_token: str = None, chat_id: str = None
         return False
 
 
+def send_telegram_message_with_buttons(message: str, buttons: list[list[dict]],
+                                        bot_token: str = None, chat_id: str = None) -> bool:
+    """Send a message with inline buttons attached (e.g. Approve/Reject).
+    buttons is a list of rows, each row a list of {"text": ..., "callback_data": ...}
+    dicts — matches Telegram's InlineKeyboardMarkup shape directly."""
+    bot_token = bot_token or os.environ.get("TELEGRAM_BOT_TOKEN")
+    chat_id = chat_id or os.environ.get("TELEGRAM_CHAT_ID")
+
+    if not bot_token or not chat_id:
+        log.warning("TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID not set — skipping button message:\n%s", message)
+        return False
+
+    url = f"{TELEGRAM_API_BASE}/bot{bot_token}/sendMessage"
+    payload = {
+        "chat_id": chat_id,
+        "text": message,
+        "parse_mode": "Markdown",
+        "disable_web_page_preview": True,
+        "reply_markup": {"inline_keyboard": buttons},
+    }
+
+    try:
+        resp = requests.post(url, json=payload, timeout=10)
+        resp.raise_for_status()
+        return True
+    except requests.RequestException as e:
+        log.error("Failed to send Telegram button message: %s", e)
+        return False
+
+
+def get_telegram_updates(offset: int = None, bot_token: str = None, timeout: int = 0) -> list[dict]:
+    """Poll Telegram for updates (messages, button taps) since `offset`.
+    Returns an empty list on any failure — a polling hiccup should never
+    crash a poll cycle."""
+    bot_token = bot_token or os.environ.get("TELEGRAM_BOT_TOKEN")
+    if not bot_token:
+        return []
+
+    url = f"{TELEGRAM_API_BASE}/bot{bot_token}/getUpdates"
+    params = {"timeout": timeout}
+    if offset is not None:
+        params["offset"] = offset
+
+    try:
+        resp = requests.get(url, params=params, timeout=timeout + 10)
+        resp.raise_for_status()
+        return resp.json().get("result", [])
+    except requests.RequestException as e:
+        log.error("Failed to fetch Telegram updates: %s", e)
+        return []
+
+
+def answer_callback_query(callback_query_id: str, text: str = None,
+                           bot_token: str = None) -> bool:
+    """Acknowledge a button tap — Telegram shows a loading spinner on the
+    user's client until this is called, regardless of whether there's
+    anything to actually tell them."""
+    bot_token = bot_token or os.environ.get("TELEGRAM_BOT_TOKEN")
+    if not bot_token:
+        return False
+
+    url = f"{TELEGRAM_API_BASE}/bot{bot_token}/answerCallbackQuery"
+    payload = {"callback_query_id": callback_query_id}
+    if text:
+        payload["text"] = text
+
+    try:
+        resp = requests.post(url, json=payload, timeout=10)
+        resp.raise_for_status()
+        return True
+    except requests.RequestException as e:
+        log.error("Failed to answer callback query: %s", e)
+        return False
+
+
 def _format_rank_line(signal, wallet_ranks: dict = None, pool_size: int = None) -> str:
     """e.g. 'Overall ranks (of 50 tracked): #3, #7, #22, #41' — shows where
     the specific agreeing wallets sit in the full candidate pool, not just

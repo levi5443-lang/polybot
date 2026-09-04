@@ -27,6 +27,7 @@ log = logging.getLogger("risk_manager")
 
 POSITION_SIZE_PCT = 0.02      # 2% of wallet balance per trade
 DAILY_LOSS_CAP_USD = 100.0    # stop opening new trades once today's realized losses hit this
+TOTAL_EXPOSURE_CAP_PCT = 0.26 # never have more than this fraction of the wallet across ALL open live positions combined
 
 # Shared across both services (worker + dashboard) — this is what makes
 # /history and /accuracy on Telegram (served by the dashboard) able to see
@@ -50,6 +51,36 @@ def get_position_size_usd(wallet_balance_usd: float) -> float:
     of some fixed starting amount — so it naturally shrinks if the bankroll
     is down and grows if it's up."""
     return round(wallet_balance_usd * POSITION_SIZE_PCT, 2)
+
+
+def get_current_live_exposure_usd() -> float:
+    """Sum of size_usd across every OPEN, live-mode trade — how much is
+    currently at risk across all live positions combined, right now."""
+    trades = _load_trade_log()
+    return sum(t["size_usd"] for t in trades if t.get("mode") == "live" and t["status"] == "open")
+
+
+def compute_trade_size_usd(wallet_balance_usd: float) -> float:
+    """The size a new LIVE trade should use: 2% of current balance, but
+    never allowed to push total open live exposure past
+    TOTAL_EXPOSURE_CAP_PCT of the wallet.
+
+    Returns 0.0 if the 2% trade wouldn't fit under the cap at all — trades
+    are SKIPPED entirely in that case, never silently downsized, so every
+    live position stays a consistent, predictable 2% risk rather than some
+    smaller leftover amount that's harder to reason about.
+    """
+    proposed = get_position_size_usd(wallet_balance_usd)
+    current_exposure = get_current_live_exposure_usd()
+    cap_usd = TOTAL_EXPOSURE_CAP_PCT * wallet_balance_usd
+
+    if current_exposure + proposed > cap_usd:
+        log.info("Trade size blocked by exposure cap: current $%.2f + proposed $%.2f "
+                  "would exceed %.0f%% cap ($%.2f of $%.2f balance).",
+                  current_exposure, proposed, TOTAL_EXPOSURE_CAP_PCT * 100, cap_usd, wallet_balance_usd)
+        return 0.0
+
+    return proposed
 
 
 def has_open_trade(market_id: str, outcome: str, mode: str = "live") -> bool:
