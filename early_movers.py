@@ -19,6 +19,13 @@ wallets are in it at that moment but more join later, that's a real
 opportunity this won't catch — it deliberately only measures "who got in
 fast," not ongoing activity (that's what the regular category consensus
 signals are for).
+
+⚠️ DIAGNOSTIC MODE (as of this version): MIN_EARLY_MOVERS is temporarily
+set to 1 (not the intended 2), and extra diagnostic logging was added,
+because zero early-mover signals fired across 25+ consecutive real
+cycles at threshold=2 — worth confirming whether that's genuine rarity
+or a deeper bug in how "new" is being determined before trusting the
+feature. Revert to MIN_EARLY_MOVERS = 2 once that's understood.
 """
 
 import json
@@ -30,7 +37,7 @@ from consensus_logic import compute_consensus
 
 log = logging.getLogger("early_movers")
 
-MIN_EARLY_MOVERS = 2
+MIN_EARLY_MOVERS = 1  # TEMPORARY DIAGNOSTIC — was 2. See note below.
 NEWEST_EVENTS_TO_CHECK = 100  # how many of Polymarket's newest events to look at each cycle
 
 from storage_paths import persistent_path
@@ -92,6 +99,18 @@ def find_early_movers(all_positions: list, category_map: dict) -> list:
     log.info("Early movers: %d brand-new market(s) discovered this cycle.", len(new_market_ids))
 
     new_market_positions = [p for p in all_positions if p.market_id in new_market_ids]
+
+    # DIAGNOSTIC: how many of the "new" markets have ANY tracked wallet in
+    # them at all, regardless of threshold? This tells us whether the zero
+    # results are "genuinely rare" (some overlap exists, just below 2) or
+    # "structurally broken" (essentially zero overlap ever) in one cycle,
+    # rather than needing to wait and guess across many cycles.
+    touched_market_ids = {p.market_id for p in new_market_positions}
+    log.info("Early movers DIAGNOSTIC: %d/%d new markets have ANY tracked wallet in them "
+              "(%d total matching positions from %d wallets).",
+              len(touched_market_ids), len(new_market_ids), len(new_market_positions),
+              len({p.wallet for p in new_market_positions}))
+
     signals = compute_consensus(new_market_positions, threshold=MIN_EARLY_MOVERS)
 
     for s in signals:
