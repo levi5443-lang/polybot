@@ -97,26 +97,35 @@ def migrate_legacy_local_data() -> None:
     real data, pull that local data into Redis. No-ops harmlessly once the
     migration has already happened (Redis will no longer be empty)."""
     if not _redis_client:
-        return  # nothing to migrate INTO — we're already just using local files
+        log.info("Legacy data migration: no Redis client configured, skipping.")
+        return
+
+    log.info("Legacy data migration: checking %d key(s)...", len(_LEGACY_KEYS_AND_DEFAULTS))
 
     for key, empty_default in _LEGACY_KEYS_AND_DEFAULTS:
         current = get_json(key, empty_default)
         already_has_data = bool(current) and current != empty_default
         if already_has_data:
-            continue  # Redis already has real data for this key — don't overwrite it
+            log.info("  '%s': shared storage already has data (%d item(s)) — skipping.",
+                      key, len(current) if hasattr(current, "__len__") else 0)
+            continue
 
         path = _local_path(key)
         if not os.path.exists(path):
+            log.info("  '%s': no legacy local file found at %s — nothing to recover.", key, path)
             continue
+
         try:
             with open(path, "r") as f:
                 legacy_value = json.load(f)
-        except (json.JSONDecodeError, OSError):
+        except (json.JSONDecodeError, OSError) as e:
+            log.warning("  '%s': legacy local file at %s exists but couldn't be read (%s).", key, path, e)
             continue
 
         if not legacy_value or legacy_value == empty_default:
-            continue  # old file exists but has nothing worth recovering
+            log.info("  '%s': legacy local file at %s exists but is empty — nothing to recover.", key, path)
+            continue
 
         set_json(key, legacy_value)
-        log.info("Recovered legacy local data for '%s' (%d item(s)) into shared storage.",
-                  key, len(legacy_value))
+        log.info("  '%s': RECOVERED %d item(s) from %s into shared storage.",
+                  key, len(legacy_value), path)
