@@ -19,6 +19,8 @@ class Position:
     size_usd: float
     event_id: str = ""
     token_id: str = ""
+    end_date: str = ""     # market's expected resolution date, as reported by Polymarket
+    cur_price: float = 0.0 # current market price for this specific outcome (0-1)
 
 
 @dataclass
@@ -31,10 +33,21 @@ class ConsensusSignal:
     category: str = "Uncategorized"
     event_id: str = ""
     token_id: str = ""
+    end_date: str = ""
+    cur_price: float = 0.0
 
     @property
     def count(self) -> int:
         return len(self.agreeing_wallets)
+
+    @property
+    def expected_return_pct(self) -> float:
+        """Return on a winning $1 bought at cur_price: a share always pays
+        out $1 if correct, so profit per dollar invested is (1-price)/price.
+        Returns 0 if price is unknown or invalid (e.g. 0 or >=1)."""
+        if not self.cur_price or self.cur_price <= 0 or self.cur_price >= 1:
+            return 0.0
+        return round(((1 - self.cur_price) / self.cur_price) * 100, 1)
 
     def to_dict(self, total_tracked: int) -> dict:
         return {
@@ -82,6 +95,11 @@ def parse_positions(wallet: str, raw: list[dict], min_size: float = MIN_POSITION
 
         if size_usd < min_size:
             continue
+        try:
+            cur_price = float(p.get("curPrice") or p.get("avgPrice") or 0)
+        except (TypeError, ValueError):
+            cur_price = 0.0
+
         out.append(Position(
             wallet=wallet,
             market_id=p.get("conditionId") or p.get("marketId", "unknown"),
@@ -90,6 +108,8 @@ def parse_positions(wallet: str, raw: list[dict], min_size: float = MIN_POSITION
             size_usd=size_usd,
             event_id=str(p.get("eventId") or ""),
             token_id=str(p.get("asset") or ""),
+            end_date=str(p.get("endDate") or ""),
+            cur_price=cur_price,
         ))
     return out
 
@@ -101,7 +121,8 @@ def compute_consensus(all_positions: list[Position], threshold: int = CONSENSUS_
         if key not in grouped:
             grouped[key] = ConsensusSignal(
                 pos.market_id, pos.market_question, pos.outcome,
-                event_id=pos.event_id, token_id=pos.token_id
+                event_id=pos.event_id, token_id=pos.token_id,
+                end_date=pos.end_date, cur_price=pos.cur_price
             )
         signal = grouped[key]
         if pos.wallet not in signal.agreeing_wallets:

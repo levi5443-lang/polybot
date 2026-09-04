@@ -74,6 +74,19 @@ def has_pending_approval(market_id: str, outcome: str) -> bool:
     )
 
 
+def _format_resolution_date(end_date: str) -> str:
+    """Turns Polymarket's raw endDate into something readable, e.g.
+    'Sep 15, 2026'. Returns 'unknown' if the date is missing or malformed
+    — never lets a formatting hiccup block the whole approval message."""
+    if not end_date:
+        return "unknown"
+    try:
+        dt = datetime.fromisoformat(str(end_date).replace("Z", "+00:00"))
+        return dt.strftime("%b %d, %Y")
+    except (ValueError, TypeError):
+        return end_date  # show the raw value rather than hiding it entirely
+
+
 def request_trade_approval(signal) -> None:
     """Send an Approve/Reject prompt for a live signal and remember it."""
     short_id = uuid.uuid4().hex[:8]
@@ -93,11 +106,34 @@ def request_trade_approval(signal) -> None:
     ) if signal.agreeing_wallets else None
     record_line = f"\n{signal.category} record (lead trader): {record_str}" if record_str else ""
 
+    resolution_line = f"Expected resolution: {_format_resolution_date(signal.end_date)}\n"
+
+    return_pct = signal.expected_return_pct
+    if return_pct > 0:
+        return_line = f"Return if correct: +{return_pct}% (buying at ${signal.cur_price:.2f})\n"
+        # A $ estimate is a genuine convenience, but it's inherently a
+        # PREVIEW — the real size gets recomputed fresh (fresh balance,
+        # fresh 26% exposure check) at the moment you actually approve,
+        # so this number can differ slightly from what actually executes.
+        try:
+            import execution
+            balance = execution.get_wallet_balance_usd()
+            preview_size = risk_manager.get_position_size_usd(balance)
+            preview_profit = preview_size * (return_pct / 100)
+            return_line += (f"Est. profit: ~${preview_profit:,.2f} on a ~${preview_size:,.2f} "
+                             f"position (preview — recalculated fresh if you approve)\n")
+        except Exception as e:
+            log.warning("Could not compute a preview \\$ estimate: %s", e)
+    else:
+        return_line = ""
+
     message = (
         f"🔔 *APPROVAL NEEDED*  _[{signal.category}]_\n\n"
         f"Market: {signal.market_question}\n"
         f"Side: *{signal.outcome}*\n"
-        f"Agreement: {signal.count} tracked top traders{record_line}\n\n"
+        f"Agreement: {signal.count} tracked top traders{record_line}\n"
+        f"{resolution_line}"
+        f"{return_line}\n"
         f"Take this trade?"
     )
     buttons = [[
