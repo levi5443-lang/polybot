@@ -212,6 +212,9 @@ def run_early_movers(data):
 
 
 def run_forever():
+    import shared_storage
+    shared_storage.migrate_legacy_local_data()
+
     log.info("Starting consensus bot. PAPER_MODE=%s, category_threshold=%d, poll=%ds, period=%s",
               PAPER_MODE, CATEGORY_CONSENSUS_THRESHOLD, POLL_INTERVAL_SECONDS, LEADERBOARD_PERIOD)
     while True:
