@@ -8,8 +8,6 @@ but prediction-market platforms iterate their APIs fairly often.
 
 import time
 import logging
-import json
-import os
 import requests
 
 log = logging.getLogger("polymarket_api")
@@ -18,31 +16,20 @@ DATA_API_BASE = "https://data-api.polymarket.com"
 GAMMA_API_BASE = "https://gamma-api.polymarket.com"
 CLOB_API_BASE = "https://clob.polymarket.com"
 
-# Event categories basically never change once assigned, so cache them to
-# disk (not just in-memory) — that way every run after the first one, even
-# a brand-new `python consensus_bot.py` invocation, skips re-fetching
-# categories for events it's already seen.
-from storage_paths import persistent_path
+# Event categories basically never change once assigned, so cache them —
+# shared across both services (worker + dashboard), not just local to
+# whichever one happens to look one up first.
+from shared_storage import get_json, set_json
 
-CATEGORY_CACHE_FILE = persistent_path("category_cache.json")
+CATEGORY_CACHE_KEY = "category_cache.json"
 
 
 def _load_category_cache() -> dict:
-    if os.path.exists(CATEGORY_CACHE_FILE):
-        try:
-            with open(CATEGORY_CACHE_FILE, "r") as f:
-                return json.load(f)
-        except (json.JSONDecodeError, OSError):
-            return {}
-    return {}
+    return get_json(CATEGORY_CACHE_KEY, {})
 
 
 def _save_category_cache(cache: dict) -> None:
-    try:
-        with open(CATEGORY_CACHE_FILE, "w") as f:
-            json.dump(cache, f)
-    except OSError:
-        pass  # caching is a nice-to-have — never let a write failure be fatal  # market metadata / resolutions
+    set_json(CATEGORY_CACHE_KEY, cache)
 
 
 def fetch_leaderboard(period: str = "30d", limit: int = 20) -> list[str]:

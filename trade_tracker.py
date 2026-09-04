@@ -9,8 +9,6 @@ track record from paper trades BEFORE ever risking money — you'll have
 real win-rate numbers to look at, not just a hope that the strategy works.
 """
 
-import json
-import os
 import logging
 
 from polymarket_api import check_market_resolution, polite_sleep
@@ -19,9 +17,9 @@ from datetime import datetime, timezone
 
 log = logging.getLogger("trade_tracker")
 
-from storage_paths import persistent_path
+from shared_storage import get_json, set_json
 
-DIGEST_STATE_FILE = persistent_path("digest_state.json")
+DIGEST_STATE_KEY = "digest_state.json"
 
 
 def sync_resolved_trades() -> int:
@@ -242,21 +240,11 @@ def format_daily_digest_message() -> str:
 
 
 def _load_digest_state() -> dict:
-    if os.path.exists(DIGEST_STATE_FILE):
-        try:
-            with open(DIGEST_STATE_FILE, "r") as f:
-                return json.load(f)
-        except (json.JSONDecodeError, OSError):
-            return {}
-    return {}
+    return get_json(DIGEST_STATE_KEY, {})
 
 
 def _save_digest_state(state: dict) -> None:
-    try:
-        with open(DIGEST_STATE_FILE, "w") as f:
-            json.dump(state, f)
-    except OSError as e:
-        log.error("Could not save digest state: %s", e)
+    set_json(DIGEST_STATE_KEY, state)
 
 
 def maybe_send_daily_digest(send_fn) -> bool:

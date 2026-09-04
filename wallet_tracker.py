@@ -13,17 +13,16 @@ Polymarket's resolved markets — but this tracks OTHER traders' accuracy,
 not the bot's own trades.
 """
 
-import json
 import logging
 from datetime import datetime, timezone
 
 from consensus_logic import Position
 from polymarket_api import check_market_resolution, polite_sleep
-from storage_paths import persistent_path
+from shared_storage import get_json, set_json
 
 log = logging.getLogger("wallet_tracker")
 
-WALLET_RECORDS_FILE = persistent_path("wallet_records.json")
+WALLET_RECORDS_KEY = "wallet_records.json"
 
 # Don't show a win rate percentage until a wallet has at least this many
 # RESOLVED positions in that category — otherwise early noise (e.g. 1-0,
@@ -32,19 +31,11 @@ MIN_SAMPLE_SIZE = 5
 
 
 def _load_records() -> dict:
-    try:
-        with open(WALLET_RECORDS_FILE, "r") as f:
-            return json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError, OSError):
-        return {}
+    return get_json(WALLET_RECORDS_KEY, {})
 
 
 def _save_records(records: dict) -> None:
-    try:
-        with open(WALLET_RECORDS_FILE, "w") as f:
-            json.dump(records, f)
-    except OSError as e:
-        log.error("Could not save wallet records: %s", e)
+    set_json(WALLET_RECORDS_KEY, records)
 
 
 def _record_key(wallet: str, market_id: str, outcome: str) -> str:

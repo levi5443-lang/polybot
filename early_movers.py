@@ -28,8 +28,6 @@ or a deeper bug in how "new" is being determined before trusting the
 feature. Revert to MIN_EARLY_MOVERS = 2 once that's understood.
 """
 
-import json
-import os
 import logging
 
 from polymarket_api import fetch_newest_events
@@ -40,27 +38,17 @@ log = logging.getLogger("early_movers")
 MIN_EARLY_MOVERS = 1  # TEMPORARY DIAGNOSTIC — was 2. See note below.
 NEWEST_EVENTS_TO_CHECK = 100  # how many of Polymarket's newest events to look at each cycle
 
-from storage_paths import persistent_path
+from shared_storage import get_json, set_json
 
-SEEN_EVENTS_FILE = persistent_path("seen_events_cache.json")
+SEEN_EVENTS_KEY = "seen_events_cache.json"
 
 
 def _load_seen_events() -> set:
-    if os.path.exists(SEEN_EVENTS_FILE):
-        try:
-            with open(SEEN_EVENTS_FILE, "r") as f:
-                return set(json.load(f))
-        except (json.JSONDecodeError, OSError):
-            return set()
-    return set()
+    return set(get_json(SEEN_EVENTS_KEY, []))
 
 
 def _save_seen_events(seen: set) -> None:
-    try:
-        with open(SEEN_EVENTS_FILE, "w") as f:
-            json.dump(list(seen), f)
-    except OSError:
-        pass
+    set_json(SEEN_EVENTS_KEY, list(seen))
 
 
 def find_early_movers(all_positions: list, category_map: dict) -> list:

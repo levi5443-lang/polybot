@@ -20,8 +20,6 @@ the actual order placement in execution.py behaves as documented against
 Polymarket's real CLOB. Treat that part as an unverified first draft.
 """
 
-import json
-import os
 import logging
 from datetime import datetime, timezone
 
@@ -30,27 +28,21 @@ log = logging.getLogger("risk_manager")
 POSITION_SIZE_PCT = 0.02      # 2% of wallet balance per trade
 DAILY_LOSS_CAP_USD = 100.0    # stop opening new trades once today's realized losses hit this
 
-from storage_paths import persistent_path
+# Shared across both services (worker + dashboard) — this is what makes
+# /history and /accuracy on Telegram (served by the dashboard) able to see
+# trades the worker actually placed. A local-only file would be invisible
+# across that service boundary.
+from shared_storage import get_json, set_json
 
-TRADE_LOG_FILE = persistent_path("trade_log.json")
+TRADE_LOG_KEY = "trade_log.json"
 
 
 def _load_trade_log() -> list[dict]:
-    if os.path.exists(TRADE_LOG_FILE):
-        try:
-            with open(TRADE_LOG_FILE, "r") as f:
-                return json.load(f)
-        except (json.JSONDecodeError, OSError):
-            return []
-    return []
+    return get_json(TRADE_LOG_KEY, [])
 
 
 def _save_trade_log(trades: list[dict]) -> None:
-    try:
-        with open(TRADE_LOG_FILE, "w") as f:
-            json.dump(trades, f, indent=2)
-    except OSError as e:
-        log.error("Could not save trade log: %s", e)
+    set_json(TRADE_LOG_KEY, trades)
 
 
 def get_position_size_usd(wallet_balance_usd: float) -> float:
