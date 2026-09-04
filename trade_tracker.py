@@ -110,6 +110,28 @@ def get_accuracy(mode: str = None, category: str = None) -> dict:
     }
 
 
+def get_resolved_trades_today(mode: str = None) -> list[dict]:
+    """Individual trade records closed today (UTC calendar day), most
+    recent first — this is what lets the digest actually SHOW which
+    specific trades won or lost, not just an aggregate percentage."""
+    trades = _load_trade_log()
+    today = datetime.now(timezone.utc).date()
+    result = []
+    for t in trades:
+        if t["status"] != "closed" or "correct" not in t or not t.get("closed_at"):
+            continue
+        if mode and t.get("mode") != mode:
+            continue
+        try:
+            closed_date = datetime.fromisoformat(t["closed_at"]).date()
+        except (ValueError, TypeError):
+            continue
+        if closed_date == today:
+            result.append(t)
+    result.sort(key=lambda t: t["closed_at"], reverse=True)
+    return result
+
+
 def format_accuracy_summary(mode: str = "paper") -> str:
     stats = get_accuracy(mode=mode)
     if stats["total_closed"] == 0:
@@ -118,15 +140,42 @@ def format_accuracy_summary(mode: str = "paper") -> str:
             f"({stats['win_rate_pct']}%)")
 
 
+MAX_TODAY_LINES = 15  # keeps the digest well under Telegram's message length limit
+
+
+def _format_trade_line(t: dict) -> str:
+    emoji = "✅" if t.get("correct") else "❌"
+    mode_tag = "" if t.get("mode") == "paper" else " (LIVE)"
+    return (f"{emoji} [{t.get('category', 'Uncategorized')}]{mode_tag} {t['market_question']} — "
+            f"predicted {t['outcome']}, actual {t.get('actual_outcome', '?')}")
+
+
 def format_daily_digest_message() -> str:
-    """A single Telegram-ready message summarizing accuracy across both
-    paper and live trades, plus a breakdown by category for whichever
-    mode has more data (paper, until live trading actually starts)."""
+    """A single Telegram-ready message: today's individual trade results
+    (win/loss, one line each) PLUS running totals across everything ever
+    tracked. Today's list is capped at MAX_TODAY_LINES to stay well under
+    Telegram's message length limit — the running totals still reflect
+    everything regardless of the cap."""
     paper = get_accuracy(mode="paper")
     live = get_accuracy(mode="live")
 
+    today_trades = get_resolved_trades_today()  # both modes, most recent first
+
     lines = ["📊 *Daily Accuracy Digest*\n"]
 
+    lines.append("*Today's results:*")
+    if not today_trades:
+        lines.append("No trades resolved today.")
+    else:
+        shown = today_trades[:MAX_TODAY_LINES]
+        for t in shown:
+            lines.append(_format_trade_line(t))
+        remaining = len(today_trades) - len(shown)
+        if remaining > 0:
+            lines.append(f"...and {remaining} more today (see full history in the trade log).")
+
+    lines.append("")
+    lines.append("*Running totals:*")
     if paper["total_closed"] > 0:
         lines.append(f"Paper: {paper['wins']}/{paper['total_closed']} correct "
                       f"({paper['win_rate_pct']}%)")
