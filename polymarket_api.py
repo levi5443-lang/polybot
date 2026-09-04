@@ -16,6 +16,7 @@ log = logging.getLogger("polymarket_api")
 
 DATA_API_BASE = "https://data-api.polymarket.com"
 GAMMA_API_BASE = "https://gamma-api.polymarket.com"
+CLOB_API_BASE = "https://clob.polymarket.com"
 
 # Event categories basically never change once assigned, so cache them to
 # disk (not just in-memory) — that way every run after the first one, even
@@ -83,7 +84,12 @@ def fetch_trades(wallet: str = None, market: str = None, limit: int = 500) -> li
 
 
 def fetch_resolved_markets(limit: int = 100, offset: int = 0) -> list[dict]:
-    """Closed/resolved markets with their final outcome, for backtesting."""
+    """Closed/resolved markets with their final outcome, for backtesting.
+    NOTE: no guaranteed sort order confirmed for this endpoint — fine for
+    backtest.py's broad historical sampling, but NOT reliable for checking
+    whether one SPECIFIC market has resolved (a specific market can be
+    resolved and still not appear in these first N results). Use
+    check_market_resolution() below for that instead."""
     resp = requests.get(
         f"{GAMMA_API_BASE}/markets",
         params={"closed": "true", "limit": limit, "offset": offset},
@@ -91,6 +97,32 @@ def fetch_resolved_markets(limit: int = 100, offset: int = 0) -> list[dict]:
     )
     resp.raise_for_status()
     return resp.json()
+
+
+def check_market_resolution(condition_id: str) -> str | None:
+    """Check ONE specific market's resolution status directly via the CLOB
+    API, by its condition ID — reliable regardless of how many other
+    markets have resolved recently, since we're asking about this exact
+    market rather than hoping it appears in a paginated "recently closed"
+    list. Returns the winning outcome label if resolved, else None (still
+    open, or the request failed — either way, "not confirmed resolved").
+    """
+    try:
+        resp = requests.get(f"{CLOB_API_BASE}/markets/{condition_id}", timeout=15)
+        if resp.status_code == 404:
+            return None
+        resp.raise_for_status()
+        data = resp.json()
+    except requests.RequestException:
+        return None
+
+    if not data.get("closed"):
+        return None
+
+    for token in data.get("tokens", []):
+        if token.get("winner"):
+            return token.get("outcome")
+    return None
 
 
 PREFERRED_CATEGORY_LABELS = [
