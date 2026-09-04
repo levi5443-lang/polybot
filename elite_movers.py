@@ -17,7 +17,10 @@ TOP_N_ELITE = 5
 def find_elite_moves(data: dict) -> list[dict]:
     """Returns a list of dicts, one per new position taken by a top-5
     overall-ranked wallet this cycle: {wallet, rank, market_id,
-    market_question, outcome, size_usd, category}. Empty list if none.
+    market_question, outcome, size_usd, category, token_id, end_date,
+    cur_price, event_id}. Empty list if none. token_id/end_date/cur_price
+    are what let a move be turned into a tradeable ConsensusSignal
+    downstream (see consensus_bot.py's run_elite_movers).
     """
     wallet_rank = data["wallet_overall_rank"]
     category_map = data["category_map"]
@@ -40,6 +43,10 @@ def find_elite_moves(data: dict) -> list[dict]:
             "outcome": p.outcome,
             "size_usd": p.size_usd,
             "category": category,
+            "token_id": p.token_id,
+            "end_date": p.end_date,
+            "cur_price": p.cur_price,
+            "event_id": p.event_id,
         })
 
     moves.sort(key=lambda m: m["rank"])

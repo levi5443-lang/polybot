@@ -202,6 +202,11 @@ def run_early_movers(data):
                 wallet_records=wallet_records
             ))
             _alerted_early_mover_keys.add(key)
+
+            if PAPER_MODE:
+                execute_trade(signal)
+            else:
+                request_live_trade(signal)
         else:
             log.info("(already alerted — skipping duplicate ping)")
 
@@ -226,6 +231,8 @@ def run_elite_movers(data):
             return
 
     import wallet_tracker
+    from consensus_logic import ConsensusSignal
+
     for move in moves:
         log.info("ELITE MOVE [%s]: #%d trader took '%s' on '%s' ($%.0f)",
                   move["category"], move["rank"], move["outcome"], move["market_question"],
@@ -234,6 +241,23 @@ def run_elite_movers(data):
         send_telegram_alert(format_elite_mover_message(
             move, pool_size=len(data["wallets"]), record_str=record_str
         ))
+
+        # Elite moves are single-wallet events (no "agreement" needed by
+        # definition), but execute_trade/request_live_trade both work off
+        # a ConsensusSignal shape — build one so this reuses the exact
+        # same tested logic as regular consensus and early movers, rather
+        # than duplicating it.
+        signal = ConsensusSignal(
+            market_id=move["market_id"], market_question=move["market_question"],
+            outcome=move["outcome"], agreeing_wallets=[move["wallet"]],
+            total_size_usd=move["size_usd"], category=move["category"],
+            event_id=move.get("event_id", ""), token_id=move.get("token_id", ""),
+            end_date=move.get("end_date", ""), cur_price=move.get("cur_price", 0.0),
+        )
+        if PAPER_MODE:
+            execute_trade(signal)
+        else:
+            request_live_trade(signal)
 
 
 def run_forever():
