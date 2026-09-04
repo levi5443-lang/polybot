@@ -20,7 +20,7 @@ import asyncio
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
@@ -34,6 +34,8 @@ from category_leaderboard import (  # noqa: E402
     CATEGORY_CONSENSUS_THRESHOLD,
 )
 from early_movers import find_early_movers  # noqa: E402
+from telegram_alert import send_telegram_alert  # noqa: E402
+import trade_tracker  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger("dashboard")
@@ -106,6 +108,51 @@ app = FastAPI(lifespan=lifespan)
 @app.get("/api/consensus")
 async def get_consensus():
     return _cache
+
+
+AUTHORIZED_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
+
+HELP_TEXT = (
+    "Available commands:\n"
+    "/history — most recent resolved trades\n"
+    "/accuracy — overall win rate + open trade count\n"
+    "/help — this message"
+)
+
+
+@app.post("/telegram-webhook")
+async def telegram_webhook(request: Request):
+    """Telegram POSTs here the instant a message is sent to the bot —
+    this is what makes /history and /accuracy respond immediately instead
+    of waiting for the next 5-minute poll cycle.
+
+    Only replies to messages from AUTHORIZED_CHAT_ID (your own
+    TELEGRAM_CHAT_ID) — anything else is silently ignored, so this can't
+    be used by a stranger who somehow messages the bot.
+    """
+    try:
+        update = await request.json()
+    except Exception:
+        return {"ok": True}
+
+    message = update.get("message") or {}
+    chat_id = str(message.get("chat", {}).get("id", ""))
+    text = (message.get("text") or "").strip()
+
+    if not text or not AUTHORIZED_CHAT_ID or chat_id != str(AUTHORIZED_CHAT_ID):
+        return {"ok": True}  # not a real command, or not from the authorized chat
+
+    if text.startswith("/history"):
+        reply = await asyncio.to_thread(trade_tracker.format_history_message)
+    elif text.startswith("/accuracy"):
+        reply = await asyncio.to_thread(trade_tracker.format_accuracy_command_message)
+    elif text.startswith("/help") or text.startswith("/start"):
+        reply = HELP_TEXT
+    else:
+        reply = f"Unknown command.\n\n{HELP_TEXT}"
+
+    await asyncio.to_thread(send_telegram_alert, reply)
+    return {"ok": True}
 
 
 @app.get("/")
