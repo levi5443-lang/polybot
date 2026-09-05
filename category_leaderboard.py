@@ -105,12 +105,17 @@ def build_category_data(period: str = "30d") -> dict:
         candidates.sort(key=lambda x: x[1], reverse=True)
         category_top_wallets[cat] = [w for w, _ in candidates[:TOP_N_PER_CATEGORY]]
 
-    # Polymarket's leaderboard is already ranked best-to-worst, so a
-    # wallet's position in this list IS its overall rank (1 = best).
-    # This lets alerts show not just "4 of this category's top 10 agree"
-    # but where those specific 4 traders actually sit in the full pool —
-    # e.g. #3 and #91 agreeing is a very different signal than #3 and #7.
-    wallet_overall_rank = {w: i + 1 for i, w in enumerate(wallets)}
+    # "wallets" (Polymarket's own profit-ranked list) is still how we
+    # DISCOVER candidates in the first place — there's no public API to
+    # ask Polymarket for "sort by ROI%" directly. But the actual rank we
+    # show and act on is our OWN historical realized ROI% ordering, once
+    # a wallet has enough resolved history to trust — see
+    # wallet_tracker.rank_wallets_by_realized_roi(). Wallets without
+    # enough history yet fall back to their original relative order, so
+    # the pool stays fully populated while gradually reflecting proven
+    # performance instead of raw Polymarket profit rank.
+    roi_ranked_wallets = wallet_tracker.rank_wallets_by_realized_roi(wallets)
+    wallet_overall_rank = {w: i + 1 for i, w in enumerate(roi_ranked_wallets)}
 
     return {
         "wallets": wallets,

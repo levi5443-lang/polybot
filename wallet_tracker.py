@@ -63,11 +63,14 @@ def record_observed_positions(all_positions: list[Position], category_map: dict)
             "market_question": p.market_question,
             "outcome": p.outcome,
             "category": category,
+            "size_usd": p.size_usd,
+            "entry_price": p.cur_price,  # price at the moment we first saw this position
             "first_seen_at": datetime.now(timezone.utc).isoformat(),
             "status": "open",
             "actual_outcome": None,
             "correct": None,
             "resolved_at": None,
+            "realized_pnl_usd": None,
         }
         new_positions.append(p)
 
@@ -109,6 +112,20 @@ def sync_wallet_resolutions() -> int:
         r["actual_outcome"] = actual_outcome
         r["correct"] = (r["outcome"] == actual_outcome)
         r["resolved_at"] = datetime.now(timezone.utc).isoformat()
+
+        # A winning share always pays out $1, regardless of entry price —
+        # so profit per dollar invested is (1/entry_price - 1). A losing
+        # position simply loses the full stake. Skip the P&L calc (leave
+        # it None) if we never captured a valid entry price for this
+        # record — better to omit than compute a nonsense number.
+        size_usd = r.get("size_usd")
+        entry_price = r.get("entry_price")
+        if size_usd and entry_price and entry_price > 0:
+            if r["correct"]:
+                r["realized_pnl_usd"] = size_usd * (1 / entry_price - 1)
+            else:
+                r["realized_pnl_usd"] = -size_usd
+
         resolved_count += 1
 
     if resolved_count:
@@ -147,3 +164,60 @@ def format_wallet_record(wallet: str, category: str) -> str:
     if rec["total_resolved"] < MIN_SAMPLE_SIZE:
         return f"{rec['wins']}-{rec['losses']}, {rec['win_rate_pct']}% (early)"
     return f"{rec['wins']}-{rec['losses']}, {rec['win_rate_pct']}%"
+
+
+def get_wallet_realized_roi(wallet: str) -> dict:
+    """Dollar-weighted realized ROI% across ALL of a wallet's resolved
+    positions, in every category combined — not a naive average of each
+    position's own percent return, which would let one tiny lucky bet
+    dominate the number. A wallet that turned $200 into $300 (50% ROI)
+    ranks above one that turned $50,000 into $52,000 (4% ROI), even
+    though the second made more raw dollars.
+
+    Returns {total_invested, total_pnl_usd, roi_pct, resolved_count}.
+    roi_pct is None until resolved_count reaches MIN_SAMPLE_SIZE — same
+    confidence gating as the win-rate feature, applied wallet-wide here
+    rather than per-category, since this drives the OVERALL pool order.
+    """
+    records = _load_records()
+    resolved = [
+        r for r in records.values()
+        if r["wallet"] == wallet and r["status"] == "closed"
+        and r.get("realized_pnl_usd") is not None
+    ]
+
+    total_invested = sum(r["size_usd"] for r in resolved)
+    total_pnl = sum(r["realized_pnl_usd"] for r in resolved)
+    resolved_count = len(resolved)
+
+    roi_pct = None
+    if resolved_count >= MIN_SAMPLE_SIZE and total_invested > 0:
+        roi_pct = round(100 * total_pnl / total_invested, 1)
+
+    return {
+        "total_invested": round(total_invested, 2),
+        "total_pnl_usd": round(total_pnl, 2),
+        "roi_pct": roi_pct,
+        "resolved_count": resolved_count,
+    }
+
+
+def rank_wallets_by_realized_roi(wallets: list[str]) -> list[str]:
+    """Reorders a candidate pool by historical realized ROI% instead of
+    Polymarket's own profit-rank ordering. Wallets with enough resolved
+    history (>= MIN_SAMPLE_SIZE) are sorted by ROI% descending and come
+    first; everyone else (not enough data yet to trust) keeps their
+    original relative order and is appended after — so the pool is
+    always fully populated, it just increasingly reflects real,
+    proven performance as more history accumulates over time."""
+    confident = []
+    unproven = []
+    for w in wallets:
+        roi = get_wallet_realized_roi(w)
+        if roi["roi_pct"] is not None:
+            confident.append((w, roi["roi_pct"]))
+        else:
+            unproven.append(w)
+
+    confident.sort(key=lambda pair: pair[1], reverse=True)
+    return [w for w, _ in confident] + unproven
