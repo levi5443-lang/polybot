@@ -225,12 +225,26 @@ def _time_ago(iso_timestamp: str) -> str:
     return f"{int(hours / 24)}d ago"
 
 
+def _format_resolution_date(end_date: str) -> str:
+    """Turns Polymarket's raw endDate into something readable, e.g.
+    'Sep 15, 2026'. Returns 'unknown' if missing/malformed — trades
+    recorded before this field existed simply won't have one."""
+    if not end_date:
+        return "unknown"
+    try:
+        dt = datetime.fromisoformat(str(end_date).replace("Z", "+00:00"))
+        return dt.strftime("%b %d, %Y")
+    except (ValueError, TypeError):
+        return end_date
+
+
 def _format_open_position_line(t: dict) -> str:
     mode_tag = " (LIVE)" if t.get("mode") == "live" else ""
     age = _time_ago(t.get("opened_at", ""))
+    resolves = _format_resolution_date(t.get("end_date", ""))
     size_note = f" | ${t['size_usd']:,.0f}" if t.get("mode") == "live" else ""
     return (f"🟡 [{t.get('category', 'Uncategorized')}]{mode_tag} {t['market_question']} — "
-            f"*{t['outcome']}*{size_note} | opened {age}")
+            f"*{t['outcome']}*{size_note} | opened {age} | resolves {resolves}")
 
 
 def format_open_positions_message() -> str:

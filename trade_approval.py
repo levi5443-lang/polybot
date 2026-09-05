@@ -97,6 +97,7 @@ def request_trade_approval(signal) -> None:
         "market_question": signal.market_question,
         "category": signal.category,
         "token_id": signal.token_id,
+        "end_date": signal.end_date,
         "requested_at": datetime.now(timezone.utc).isoformat(),
     }
     _save_pending(pending)
@@ -185,7 +186,8 @@ def _execute_approved_trade(pending_record: dict) -> str:
     entry_price = resp.get("price", 0) if isinstance(resp, dict) else 0
     risk_manager.record_trade_open(
         market_id, pending_record["market_question"], outcome,
-        size_usd, entry_price, pending_record["category"], mode="live"
+        size_usd, entry_price, pending_record["category"], mode="live",
+        end_date=pending_record.get("end_date", "")
     )
     return f"✅ Executed: ${size_usd:,.2f} on '{outcome}' (balance was ${balance:,.2f})."
 

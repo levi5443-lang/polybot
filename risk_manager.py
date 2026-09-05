@@ -97,10 +97,13 @@ def has_open_trade(market_id: str, outcome: str, mode: str = "live") -> bool:
 
 def record_trade_open(market_id: str, market_question: str, outcome: str,
                        size_usd: float, entry_price: float, category: str,
-                       mode: str = "live", signal_type: str = "consensus") -> None:
+                       mode: str = "live", signal_type: str = "consensus",
+                       end_date: str = "") -> None:
     """mode is 'live' (real money) or 'paper' (tracked for accuracy only,
     no money moved). signal_type is 'consensus' or 'early_mover' — lets
-    accuracy be broken down by which kind of signal produced the trade."""
+    accuracy be broken down by which kind of signal produced the trade.
+    end_date is Polymarket's own expected-resolution date for the market,
+    carried through so /positions can show when a decision is expected."""
     trades = _load_trade_log()
     trades.append({
         "market_id": market_id,
@@ -111,6 +114,7 @@ def record_trade_open(market_id: str, market_question: str, outcome: str,
         "entry_price": entry_price,
         "mode": mode,
         "signal_type": signal_type,
+        "end_date": end_date,
         "opened_at": datetime.now(timezone.utc).isoformat(),
         "status": "open",
         "realized_pnl": None,
