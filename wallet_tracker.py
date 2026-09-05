@@ -175,9 +175,12 @@ def get_wallet_realized_roi(wallet: str) -> dict:
     though the second made more raw dollars.
 
     Returns {total_invested, total_pnl_usd, roi_pct, resolved_count}.
-    roi_pct is None until resolved_count reaches MIN_SAMPLE_SIZE — same
-    confidence gating as the win-rate feature, applied wallet-wide here
-    rather than per-category, since this drives the OVERALL pool order.
+    roi_pct is available the moment a wallet has ANY resolved position
+    (resolved_count >= 1) — deliberately NOT gated behind MIN_SAMPLE_SIZE
+    the way the win-rate display is. That means a single resolved bet can
+    swing a wallet from last to first in the ranking; this is an accepted
+    tradeoff, not an oversight — real numbers immediately, accepting more
+    noise early on, rather than withholding the number until confident.
     """
     records = _load_records()
     resolved = [
@@ -191,7 +194,7 @@ def get_wallet_realized_roi(wallet: str) -> dict:
     resolved_count = len(resolved)
 
     roi_pct = None
-    if resolved_count >= MIN_SAMPLE_SIZE and total_invested > 0:
+    if resolved_count >= 1 and total_invested > 0:
         roi_pct = round(100 * total_pnl / total_invested, 1)
 
     return {
@@ -204,12 +207,12 @@ def get_wallet_realized_roi(wallet: str) -> dict:
 
 def rank_wallets_by_realized_roi(wallets: list[str]) -> list[str]:
     """Reorders a candidate pool by historical realized ROI% instead of
-    Polymarket's own profit-rank ordering. Wallets with enough resolved
-    history (>= MIN_SAMPLE_SIZE) are sorted by ROI% descending and come
-    first; everyone else (not enough data yet to trust) keeps their
-    original relative order and is appended after — so the pool is
-    always fully populated, it just increasingly reflects real,
-    proven performance as more history accumulates over time."""
+    Polymarket's own profit-rank ordering. Any wallet with at least ONE
+    resolved position is ranked by ROI% descending; wallets with zero
+    resolved positions (nothing at all to go on yet) keep their original
+    relative order and are appended after. Since ROI% is available from a
+    single resolved bet, early rankings can swing a lot on small samples —
+    that's accepted, not a bug (see get_wallet_realized_roi)."""
     confident = []
     unproven = []
     for w in wallets:
