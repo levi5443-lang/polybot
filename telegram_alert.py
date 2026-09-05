@@ -152,6 +152,24 @@ def _format_track_record_line(signal, wallet_ranks: dict = None, wallet_records:
     return f"{signal.category} record: " + " | ".join(parts) + "\n"
 
 
+def _format_roi_line(signal, wallet_ranks: dict = None, wallet_rois: dict = None) -> str:
+    """e.g. 'ROI: #3 (+142.6% / 12 resolved) | #17 (no data yet)' — the
+    actual realized ROI% number driving each wallet's rank, since a rank
+    changing on its own doesn't tell you WHY. wallet_rois is
+    {wallet: roi_str}, built by the caller via
+    wallet_tracker.format_wallet_roi()."""
+    if not wallet_ranks or not wallet_rois:
+        return ""
+    wallets_sorted = sorted(
+        (w for w in signal.agreeing_wallets if w in wallet_ranks and w in wallet_rois),
+        key=lambda w: wallet_ranks[w]
+    )
+    if not wallets_sorted:
+        return ""
+    parts = [f"#{wallet_ranks[w]} ({wallet_rois[w]})" for w in wallets_sorted]
+    return "ROI: " + " | ".join(parts) + "\n"
+
+
 def _format_resolution_date(end_date: str) -> str:
     """Turns Polymarket's raw endDate into something readable, e.g.
     'Sep 15, 2026'. Returns 'unknown' if missing/malformed."""
@@ -183,7 +201,8 @@ def _format_resolution_and_return_lines(end_date: str, cur_price: float) -> str:
 
 
 def format_consensus_message(signal, total_tracked: int, wallet_ranks: dict = None,
-                              pool_size: int = None, wallet_records: dict = None) -> str:
+                              pool_size: int = None, wallet_records: dict = None,
+                              wallet_rois: dict = None) -> str:
     """Build a readable alert message from a ConsensusSignal."""
     return (
         f"*Polymarket Consensus Signal*  _[{signal.category}]_\n\n"
@@ -192,13 +211,14 @@ def format_consensus_message(signal, total_tracked: int, wallet_ranks: dict = No
         f"Agreement: {signal.count}/{total_tracked} tracked top traders\n"
         f"{_format_rank_line(signal, wallet_ranks, pool_size)}"
         f"{_format_track_record_line(signal, wallet_ranks, wallet_records)}"
+        f"{_format_roi_line(signal, wallet_ranks, wallet_rois)}"
         f"{_format_resolution_and_return_lines(signal.end_date, signal.cur_price)}"
         f"Aggregate size: ${signal.total_size_usd:,.0f}\n"
     )
 
 
 def format_early_mover_message(signal, wallet_ranks: dict = None, pool_size: int = None,
-                                wallet_records: dict = None) -> str:
+                                wallet_records: dict = None, wallet_rois: dict = None) -> str:
     """Build a distinctly-labeled alert for a brand-new market where
     multiple tracked wallets are already positioned. Deliberately doesn't
     show "X/total_tracked" like the regular consensus message — early
@@ -210,24 +230,29 @@ def format_early_mover_message(signal, wallet_ranks: dict = None, pool_size: int
         f"{signal.count} tracked top traders already in\n"
         f"{_format_rank_line(signal, wallet_ranks, pool_size)}"
         f"{_format_track_record_line(signal, wallet_ranks, wallet_records)}"
+        f"{_format_roi_line(signal, wallet_ranks, wallet_rois)}"
         f"{_format_resolution_and_return_lines(signal.end_date, signal.cur_price)}"
         f"Aggregate size: ${signal.total_size_usd:,.0f}\n"
     )
 
 
-def format_elite_mover_message(move: dict, pool_size: int = None, record_str: str = None) -> str:
+def format_elite_mover_message(move: dict, pool_size: int = None, record_str: str = None,
+                                roi_str: str = None) -> str:
     """Build an alert for a single top-5 overall-ranked trader taking a
     new position — no agreement/threshold involved, just "this specific
     elite trader just moved." Shows the wallet's own stats (category
-    track record) so you can judge the move on its own merits."""
+    track record + overall ROI) so you can judge the move on its own
+    merits."""
     pool_note = f" (of {pool_size} tracked)" if pool_size else ""
     record_line = f"{move['category']} record: {record_str}\n" if record_str else ""
+    roi_line = f"ROI: {roi_str}\n" if roi_str else ""
     return (
         f"⭐ *TOP {move['rank']} TRADER MOVE*  _[{move['category']}]_\n\n"
         f"Overall rank: #{move['rank']}{pool_note}\n"
         f"Market: {move['market_question']}\n"
         f"Side: *{move['outcome']}*\n"
         f"{record_line}"
+        f"{roi_line}"
         f"{_format_resolution_and_return_lines(move.get('end_date', ''), move.get('cur_price', 0.0))}"
         f"Position size: ${move['size_usd']:,.0f}\n"
     )

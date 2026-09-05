@@ -166,6 +166,20 @@ def format_wallet_record(wallet: str, category: str) -> str:
     return f"{rec['wins']}-{rec['losses']}, {rec['win_rate_pct']}%"
 
 
+def format_wallet_roi(wallet: str) -> str:
+    """Short display string for a wallet's OVERALL realized ROI% (every
+    category combined — this is the same number driving the pool
+    reranking), e.g. '+142.6% (12 resolved)' or '-38.0% (1 resolved)'.
+    'no data yet' if the wallet has zero resolved positions at all.
+    Unlike the win-rate display, this is never gated by sample size — see
+    get_wallet_realized_roi for why."""
+    roi = get_wallet_realized_roi(wallet)
+    if roi["resolved_count"] == 0:
+        return "no data yet"
+    sign = "+" if roi["roi_pct"] >= 0 else ""
+    return f"{sign}{roi['roi_pct']}% ({roi['resolved_count']} resolved)"
+
+
 def get_wallet_realized_roi(wallet: str) -> dict:
     """Dollar-weighted realized ROI% across ALL of a wallet's resolved
     positions, in every category combined — not a naive average of each

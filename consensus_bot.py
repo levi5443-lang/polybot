@@ -157,10 +157,14 @@ def run_regular_consensus(data):
                 w: wallet_tracker.format_wallet_record(w, signal.category)
                 for w in signal.agreeing_wallets
             }
+            wallet_rois = {
+                w: wallet_tracker.format_wallet_roi(w)
+                for w in signal.agreeing_wallets
+            }
             send_telegram_alert(format_consensus_message(
                 signal, len(top_wallets_in_cat),
                 wallet_ranks=data["wallet_overall_rank"], pool_size=len(data["wallets"]),
-                wallet_records=wallet_records
+                wallet_records=wallet_records, wallet_rois=wallet_rois
             ))
             _alerted_keys.add(key)
         else:
@@ -197,9 +201,13 @@ def run_early_movers(data):
                 w: wallet_tracker.format_wallet_record(w, signal.category)
                 for w in signal.agreeing_wallets
             }
+            wallet_rois = {
+                w: wallet_tracker.format_wallet_roi(w)
+                for w in signal.agreeing_wallets
+            }
             send_telegram_alert(format_early_mover_message(
                 signal, wallet_ranks=data["wallet_overall_rank"], pool_size=len(data["wallets"]),
-                wallet_records=wallet_records
+                wallet_records=wallet_records, wallet_rois=wallet_rois
             ))
             _alerted_early_mover_keys.add(key)
 
@@ -238,8 +246,9 @@ def run_elite_movers(data):
                   move["category"], move["rank"], move["outcome"], move["market_question"],
                   move["size_usd"])
         record_str = wallet_tracker.format_wallet_record(move["wallet"], move["category"])
+        roi_str = wallet_tracker.format_wallet_roi(move["wallet"])
         send_telegram_alert(format_elite_mover_message(
-            move, pool_size=len(data["wallets"]), record_str=record_str
+            move, pool_size=len(data["wallets"]), record_str=record_str, roi_str=roi_str
         ))
 
         # Elite moves are single-wallet events (no "agreement" needed by
