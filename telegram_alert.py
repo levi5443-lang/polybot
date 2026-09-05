@@ -12,6 +12,7 @@ apex_signal_bot token, so a bug here can't affect your live signal channel.
 import os
 import logging
 import requests
+from datetime import datetime
 
 log = logging.getLogger("telegram_alert")
 
@@ -151,6 +152,36 @@ def _format_track_record_line(signal, wallet_ranks: dict = None, wallet_records:
     return f"{signal.category} record: " + " | ".join(parts) + "\n"
 
 
+def _format_resolution_date(end_date: str) -> str:
+    """Turns Polymarket's raw endDate into something readable, e.g.
+    'Sep 15, 2026'. Returns 'unknown' if missing/malformed."""
+    if not end_date:
+        return "unknown"
+    try:
+        dt = datetime.fromisoformat(str(end_date).replace("Z", "+00:00"))
+        return dt.strftime("%b %d, %Y")
+    except (ValueError, TypeError):
+        return str(end_date)
+
+
+def _compute_expected_return_pct(cur_price: float) -> float:
+    """A winning share always pays $1, so profit per dollar invested is
+    (1-price)/price. Returns 0 for missing/invalid prices."""
+    if not cur_price or cur_price <= 0 or cur_price >= 1:
+        return 0.0
+    return round(((1 - cur_price) / cur_price) * 100, 1)
+
+
+def _format_resolution_and_return_lines(end_date: str, cur_price: float) -> str:
+    """Shared by every alert type — resolution date always shows if
+    known; the return line only appears when we have a usable price."""
+    lines = f"Expected resolution: {_format_resolution_date(end_date)}\n"
+    return_pct = _compute_expected_return_pct(cur_price)
+    if return_pct > 0:
+        lines += f"Return if correct: +{return_pct}% (buying at ${cur_price:.2f})\n"
+    return lines
+
+
 def format_consensus_message(signal, total_tracked: int, wallet_ranks: dict = None,
                               pool_size: int = None, wallet_records: dict = None) -> str:
     """Build a readable alert message from a ConsensusSignal."""
@@ -161,6 +192,7 @@ def format_consensus_message(signal, total_tracked: int, wallet_ranks: dict = No
         f"Agreement: {signal.count}/{total_tracked} tracked top traders\n"
         f"{_format_rank_line(signal, wallet_ranks, pool_size)}"
         f"{_format_track_record_line(signal, wallet_ranks, wallet_records)}"
+        f"{_format_resolution_and_return_lines(signal.end_date, signal.cur_price)}"
         f"Aggregate size: ${signal.total_size_usd:,.0f}\n"
     )
 
@@ -178,6 +210,7 @@ def format_early_mover_message(signal, wallet_ranks: dict = None, pool_size: int
         f"{signal.count} tracked top traders already in\n"
         f"{_format_rank_line(signal, wallet_ranks, pool_size)}"
         f"{_format_track_record_line(signal, wallet_ranks, wallet_records)}"
+        f"{_format_resolution_and_return_lines(signal.end_date, signal.cur_price)}"
         f"Aggregate size: ${signal.total_size_usd:,.0f}\n"
     )
 
@@ -195,5 +228,6 @@ def format_elite_mover_message(move: dict, pool_size: int = None, record_str: st
         f"Market: {move['market_question']}\n"
         f"Side: *{move['outcome']}*\n"
         f"{record_line}"
+        f"{_format_resolution_and_return_lines(move.get('end_date', ''), move.get('cur_price', 0.0))}"
         f"Position size: ${move['size_usd']:,.0f}\n"
     )
