@@ -114,6 +114,7 @@ AUTHORIZED_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
 HELP_TEXT = (
     "Available commands:\n"
+    "/positions — currently open trades\n"
     "/history — most recent resolved trades\n"
     "/accuracy — overall win rate + open trade count\n"
     "/help — this message"
@@ -123,8 +124,8 @@ HELP_TEXT = (
 @app.post("/telegram-webhook")
 async def telegram_webhook(request: Request):
     """Telegram POSTs here the instant a message is sent to the bot —
-    this is what makes /history and /accuracy respond immediately instead
-    of waiting for the next 5-minute poll cycle.
+    this is what makes /positions, /history, and /accuracy respond
+    immediately instead of waiting for the next 5-minute poll cycle.
 
     Only replies to messages from AUTHORIZED_CHAT_ID (your own
     TELEGRAM_CHAT_ID) — anything else is silently ignored, so this can't
@@ -142,7 +143,9 @@ async def telegram_webhook(request: Request):
     if not text or not AUTHORIZED_CHAT_ID or chat_id != str(AUTHORIZED_CHAT_ID):
         return {"ok": True}  # not a real command, or not from the authorized chat
 
-    if text.startswith("/history"):
+    if text.startswith("/positions"):
+        reply = await asyncio.to_thread(trade_tracker.format_open_positions_message)
+    elif text.startswith("/history"):
         reply = await asyncio.to_thread(trade_tracker.format_history_message)
     elif text.startswith("/accuracy"):
         reply = await asyncio.to_thread(trade_tracker.format_accuracy_command_message)
