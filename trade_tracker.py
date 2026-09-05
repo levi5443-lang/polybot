@@ -194,6 +194,61 @@ def format_accuracy_command_message() -> str:
     return "\n".join(lines)
 
 
+MAX_OPEN_POSITIONS_LINES = 20  # same length-safety pattern as history/digest
+
+
+def get_open_trades(mode: str = None) -> list[dict]:
+    """Every currently-open trade (paper or live), most recently opened
+    first — this is what /positions on Telegram actually lists."""
+    trades = _load_trade_log()
+    open_trades = [t for t in trades if t["status"] == "open"]
+    if mode:
+        open_trades = [t for t in open_trades if t.get("mode") == mode]
+    open_trades.sort(key=lambda t: t.get("opened_at", ""), reverse=True)
+    return open_trades
+
+
+def _time_ago(iso_timestamp: str) -> str:
+    """e.g. '2h ago', '3d ago' — how long a position has been open."""
+    if not iso_timestamp:
+        return "unknown"
+    try:
+        opened = datetime.fromisoformat(iso_timestamp)
+    except (ValueError, TypeError):
+        return "unknown"
+    delta = datetime.now(timezone.utc) - opened
+    hours = delta.total_seconds() / 3600
+    if hours < 1:
+        return f"{int(delta.total_seconds() / 60)}m ago"
+    if hours < 24:
+        return f"{int(hours)}h ago"
+    return f"{int(hours / 24)}d ago"
+
+
+def _format_open_position_line(t: dict) -> str:
+    mode_tag = " (LIVE)" if t.get("mode") == "live" else ""
+    age = _time_ago(t.get("opened_at", ""))
+    size_note = f" | ${t['size_usd']:,.0f}" if t.get("mode") == "live" else ""
+    return (f"🟡 [{t.get('category', 'Uncategorized')}]{mode_tag} {t['market_question']} — "
+            f"*{t['outcome']}*{size_note} | opened {age}")
+
+
+def format_open_positions_message() -> str:
+    """Response for the /positions Telegram command."""
+    open_trades = get_open_trades()
+    if not open_trades:
+        return "📂 *Open Positions*\n\nNothing currently open."
+
+    lines = [f"📂 *Open Positions* ({len(open_trades)})\n"]
+    shown = open_trades[:MAX_OPEN_POSITIONS_LINES]
+    for t in shown:
+        lines.append(_format_open_position_line(t))
+    remaining = len(open_trades) - len(shown)
+    if remaining > 0:
+        lines.append(f"...and {remaining} more open.")
+    return "\n".join(lines)
+
+
 def format_daily_digest_message() -> str:
     """A single Telegram-ready message: today's individual trade results
     (win/loss, one line each) PLUS running totals across everything ever
