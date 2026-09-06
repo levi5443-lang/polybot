@@ -55,12 +55,22 @@ def sync_resolved_trades() -> int:
             continue  # still open, or the check failed — try again next cycle
 
         correct = (t["outcome"] == actual_outcome)
+        entry_price = t.get("entry_price")
 
         if t.get("mode") == "paper":
-            # Paper trades don't move money — "P&L" is just a correctness
-            # marker: +1 for correct, -1 for incorrect, so existing win/loss
-            # math (positive=win, negative=loss) keeps working unchanged.
-            pnl = 1.0 if correct else -1.0
+            # Now that entry_price is actually captured (see
+            # consensus_bot.py's execute_trade), paper trades use REAL
+            # payout math on their $1 notional unit — a win pays
+            # (1/entry_price - 1), a loss pays -1. This makes the
+            # aggregate ROI% genuinely meaningful (a market bought at
+            # $0.40 and won counts as a 150% gain, not a flat +1), while
+            # still not moving any real money. Trades logged before this
+            # fix won't have a valid entry_price — fall back to the old
+            # flat +1/-1 marker for those rather than computing nonsense.
+            if entry_price and entry_price > 0:
+                pnl = t["size_usd"] * (1 / entry_price - 1) if correct else -t["size_usd"]
+            else:
+                pnl = 1.0 if correct else -1.0
         else:
             # Live trades: a real P&L number needs actual entry/exit prices,
             # which isn't wired up yet — approximate with the full stake
@@ -105,6 +115,34 @@ def get_accuracy(mode: str = None, category: str = None) -> dict:
         "wins": wins,
         "losses": losses,
         "win_rate_pct": win_rate,
+    }
+
+
+def get_roi(mode: str = "paper") -> dict:
+    """Dollar-weighted ROI% across all of OUR OWN closed trades in a given
+    mode — same approach as wallet_tracker's per-wallet ROI, applied to
+    the bot's own track record. For paper trades this reflects "if every
+    signal had been sized equally," since each paper trade uses a flat $1
+    notional unit — a genuine measure of signal quality, separate from
+    capital allocation. Trades logged before entry_price was captured
+    (realized_pnl of exactly +1/-1 with no matching size_usd basis) are
+    still included using whatever pnl was recorded, so old data doesn't
+    just vanish, but expect the number to be less meaningful for the
+    period before this fix shipped.
+    """
+    trades = _load_trade_log()
+    closed = [
+        t for t in trades if t["status"] == "closed" and t.get("mode") == mode
+        and t.get("realized_pnl") is not None
+    ]
+    total_invested = sum(t["size_usd"] for t in closed)
+    total_pnl = sum(t["realized_pnl"] for t in closed)
+    roi_pct = round(100 * total_pnl / total_invested, 1) if total_invested > 0 else None
+    return {
+        "total_invested": round(total_invested, 2),
+        "total_pnl": round(total_pnl, 2),
+        "roi_pct": roi_pct,
+        "resolved_count": len(closed),
     }
 
 
@@ -177,15 +215,20 @@ def format_accuracy_command_message() -> str:
     daily digest's running totals, available on demand."""
     paper = get_accuracy(mode="paper")
     live = get_accuracy(mode="live")
+    paper_roi = get_roi(mode="paper")
+    live_roi = get_roi(mode="live")
+
     lines = ["📊 *Accuracy*\n"]
     if paper["total_closed"] > 0:
+        roi_note = f", ROI {paper_roi['roi_pct']:+.1f}%" if paper_roi["roi_pct"] is not None else ""
         lines.append(f"Paper: {paper['wins']}/{paper['total_closed']} correct "
-                      f"({paper['win_rate_pct']}%)")
+                      f"({paper['win_rate_pct']}%){roi_note}")
     else:
         lines.append("Paper: no resolved trades yet")
     if live["total_closed"] > 0:
+        roi_note = f", ROI {live_roi['roi_pct']:+.1f}%" if live_roi["roi_pct"] is not None else ""
         lines.append(f"Live: {live['wins']}/{live['total_closed']} correct "
-                      f"({live['win_rate_pct']}%)")
+                      f"({live['win_rate_pct']}%){roi_note}")
     else:
         lines.append("Live: no resolved trades yet")
     trades = _load_trade_log()
@@ -225,26 +268,12 @@ def _time_ago(iso_timestamp: str) -> str:
     return f"{int(hours / 24)}d ago"
 
 
-def _format_resolution_date(end_date: str) -> str:
-    """Turns Polymarket's raw endDate into something readable, e.g.
-    'Sep 15, 2026'. Returns 'unknown' if missing/malformed — trades
-    recorded before this field existed simply won't have one."""
-    if not end_date:
-        return "unknown"
-    try:
-        dt = datetime.fromisoformat(str(end_date).replace("Z", "+00:00"))
-        return dt.strftime("%b %d, %Y")
-    except (ValueError, TypeError):
-        return end_date
-
-
 def _format_open_position_line(t: dict) -> str:
     mode_tag = " (LIVE)" if t.get("mode") == "live" else ""
     age = _time_ago(t.get("opened_at", ""))
-    resolves = _format_resolution_date(t.get("end_date", ""))
     size_note = f" | ${t['size_usd']:,.0f}" if t.get("mode") == "live" else ""
     return (f"🟡 [{t.get('category', 'Uncategorized')}]{mode_tag} {t['market_question']} — "
-            f"*{t['outcome']}*{size_note} | opened {age} | resolves {resolves}")
+            f"*{t['outcome']}*{size_note} | opened {age}")
 
 
 def format_open_positions_message() -> str:
@@ -271,6 +300,8 @@ def format_daily_digest_message() -> str:
     everything regardless of the cap."""
     paper = get_accuracy(mode="paper")
     live = get_accuracy(mode="live")
+    paper_roi = get_roi(mode="paper")
+    live_roi = get_roi(mode="live")
 
     today_trades = get_resolved_trades_today()  # both modes, most recent first
 
@@ -290,14 +321,16 @@ def format_daily_digest_message() -> str:
     lines.append("")
     lines.append("*Running totals:*")
     if paper["total_closed"] > 0:
+        roi_note = f", ROI {paper_roi['roi_pct']:+.1f}%" if paper_roi["roi_pct"] is not None else ""
         lines.append(f"Paper: {paper['wins']}/{paper['total_closed']} correct "
-                      f"({paper['win_rate_pct']}%)")
+                      f"({paper['win_rate_pct']}%){roi_note}")
     else:
         lines.append("Paper: no resolved trades yet")
 
     if live["total_closed"] > 0:
+        roi_note = f", ROI {live_roi['roi_pct']:+.1f}%" if live_roi["roi_pct"] is not None else ""
         lines.append(f"Live: {live['wins']}/{live['total_closed']} correct "
-                      f"({live['win_rate_pct']}%)")
+                      f"({live['win_rate_pct']}%){roi_note}")
     else:
         lines.append("Live: no resolved trades yet")
 

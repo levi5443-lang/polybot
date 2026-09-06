@@ -46,6 +46,23 @@ def _save_trade_log(trades: list[dict]) -> None:
     set_json(TRADE_LOG_KEY, trades)
 
 
+def reset_paper_trades() -> int:
+    """Wipes every paper-mode entry from the trade log — open or closed —
+    while leaving any live (real-money) trades completely untouched.
+    Returns how many paper entries were removed. This is intentionally
+    NOT automatic; it only runs when explicitly triggered (e.g. the
+    /resetpaper Telegram command), since wiping trade history is
+    something you should control precisely, not something that happens
+    as a side effect of a deploy."""
+    trades = _load_trade_log()
+    remaining = [t for t in trades if t.get("mode") != "paper"]
+    removed_count = len(trades) - len(remaining)
+    _save_trade_log(remaining)
+    log.info("Reset: removed %d paper trade(s) from the ledger, %d live trade(s) preserved.",
+              removed_count, len(remaining))
+    return removed_count
+
+
 def get_position_size_usd(wallet_balance_usd: float) -> float:
     """2% of current wallet balance. Recomputed fresh each trade — NOT 2%
     of some fixed starting amount — so it naturally shrinks if the bankroll

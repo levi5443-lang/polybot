@@ -58,7 +58,7 @@ def execute_trade(signal):
     # a dollar amount, since no money actually moves in paper mode.
     risk_manager.record_trade_open(
         signal.market_id, signal.market_question, signal.outcome,
-        size_usd=1.0, entry_price=0, category=signal.category,
+        size_usd=1.0, entry_price=signal.cur_price, category=signal.category,
         mode="paper", signal_type="consensus", end_date=signal.end_date
     )
 
