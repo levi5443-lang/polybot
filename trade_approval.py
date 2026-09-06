@@ -157,8 +157,8 @@ def _execute_approved_trade(pending_record: dict) -> str:
     outcome = pending_record["outcome"]
     token_id = pending_record["token_id"]
 
-    if risk_manager.has_open_trade(market_id, outcome, mode="live"):
-        return "Already have an open live position on this — no action taken."
+    if risk_manager.has_ever_traded(market_id, outcome, mode="live"):
+        return "Already traded this market before (open or resolved) — no action taken."
 
     if risk_manager.daily_loss_cap_reached():
         return "Daily loss cap already reached — no action taken."

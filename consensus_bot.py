@@ -47,7 +47,7 @@ def execute_trade(signal):
     money should never move without your explicit tap."""
     import risk_manager
 
-    if risk_manager.has_open_trade(signal.market_id, signal.outcome, mode="paper"):
+    if risk_manager.has_ever_traded(signal.market_id, signal.outcome, mode="paper"):
         log.info("[PAPER TRADE] Already tracking '%s' [%s] — not re-logging.",
                   signal.market_question, signal.outcome)
         return
@@ -70,8 +70,8 @@ def request_live_trade(signal):
     import risk_manager
     import trade_approval
 
-    if risk_manager.has_open_trade(signal.market_id, signal.outcome, mode="live"):
-        log.info("Already have an open live position on '%s' [%s] — skipping.",
+    if risk_manager.has_ever_traded(signal.market_id, signal.outcome, mode="live"):
+        log.info("Already traded '%s' [%s] before (open or resolved) — skipping.",
                   signal.market_question, signal.outcome)
         return
 

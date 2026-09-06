@@ -112,6 +112,26 @@ def has_open_trade(market_id: str, outcome: str, mode: str = "live") -> bool:
     )
 
 
+def has_ever_traded(market_id: str, outcome: str, mode: str = "live") -> bool:
+    """True if this exact market+outcome+mode has EVER been logged,
+    regardless of current status (open OR closed). This is the right
+    check before opening a brand-new trade — has_open_trade alone isn't
+    enough, because the moment a trade resolves it becomes 'closed', and
+    a signal that keeps re-firing on an already-DECIDED market would slip
+    right past an open-only check and get re-traded every single cycle
+    forever (a real bug this fixed: a concluded match kept getting
+    re-opened and instantly re-resolved, over and over, because nothing
+    remembered it had already been traded once it closed). Markets never
+    un-resolve on Polymarket, so once traded, a market+outcome is done —
+    permanently — regardless of status."""
+    trades = _load_trade_log()
+    return any(
+        t["market_id"] == market_id and t["outcome"] == outcome
+        and t.get("mode", "live") == mode
+        for t in trades
+    )
+
+
 def record_trade_open(market_id: str, market_question: str, outcome: str,
                        size_usd: float, entry_price: float, category: str,
                        mode: str = "live", signal_type: str = "consensus",
