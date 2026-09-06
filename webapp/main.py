@@ -36,6 +36,7 @@ from category_leaderboard import (  # noqa: E402
 from early_movers import find_early_movers  # noqa: E402
 from telegram_alert import send_telegram_alert  # noqa: E402
 import trade_tracker  # noqa: E402
+import risk_manager  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger("dashboard")
@@ -116,7 +117,8 @@ HELP_TEXT = (
     "Available commands:\n"
     "/positions — currently open trades\n"
     "/history — most recent resolved trades\n"
-    "/accuracy — overall win rate + open trade count\n"
+    "/accuracy — overall win rate + ROI + open trade count\n"
+    "/resetpaper — wipe paper trade history (asks to confirm first)\n"
     "/help — this message"
 )
 
@@ -149,6 +151,14 @@ async def telegram_webhook(request: Request):
         reply = await asyncio.to_thread(trade_tracker.format_history_message)
     elif text.startswith("/accuracy"):
         reply = await asyncio.to_thread(trade_tracker.format_accuracy_command_message)
+    elif text.startswith("/resetpaper confirm"):
+        removed = await asyncio.to_thread(risk_manager.reset_paper_trades)
+        reply = f"✅ Cleared {removed} paper trade(s). Starting fresh."
+    elif text.startswith("/resetpaper"):
+        reply = ("⚠️ This will permanently delete ALL paper trade history "
+                  "(open and resolved) — accuracy, ROI, everything. Live trades "
+                  "are never affected.\n\nSend /resetpaper confirm to proceed, "
+                  "or ignore this to cancel.")
     elif text.startswith("/help") or text.startswith("/start"):
         reply = HELP_TEXT
     else:
