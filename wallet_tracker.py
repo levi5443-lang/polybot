@@ -215,6 +215,30 @@ def get_position_ages(wallets: list[str], market_id: str, outcome: str) -> dict:
     return ages
 
 
+def get_price_changes(wallets: list[str], market_id: str, outcome: str, current_price: float) -> dict:
+    """For each wallet, how many percentage points the price has moved
+    since THEY specifically entered — positive means the price has moved
+    TOWARD this outcome since they got in (their read is being confirmed
+    by the market), negative means it's drifted away (their read is being
+    challenged). Uses entry_price, already captured per-position for the
+    ROI feature — no new tracking needed. Returns {wallet: change_str},
+    e.g. '+15pts' or '-5pts', 'unknown' if we lack a valid entry price or
+    current price to compare against."""
+    records = _load_records()
+    changes = {}
+    for w in wallets:
+        key = _record_key(w, market_id, outcome)
+        rec = records.get(key)
+        entry_price = rec.get("entry_price") if rec else None
+        if not entry_price or entry_price <= 0 or not current_price:
+            changes[w] = "unknown"
+            continue
+        delta_pts = round((current_price - entry_price) * 100)
+        sign = "+" if delta_pts >= 0 else ""
+        changes[w] = f"{sign}{delta_pts}pts"
+    return changes
+
+
 def get_wallet_realized_roi(wallet: str) -> dict:
     """Dollar-weighted realized ROI% across ALL of a wallet's resolved
     positions, in every category combined — not a naive average of each

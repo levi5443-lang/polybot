@@ -210,6 +210,33 @@ def format_history_message(n: int = MAX_HISTORY_LINES) -> str:
     return "\n".join(lines)
 
 
+def get_categories_with_closed_trades(mode: str = "paper") -> list:
+    """Every distinct category that has at least one resolved trade, in
+    a given mode — used to drive the per-category breakdown without
+    hardcoding a category list anywhere."""
+    trades = _load_trade_log()
+    return sorted({
+        t.get("category", "Uncategorized") for t in trades
+        if t["status"] == "closed" and t.get("mode") == mode and "correct" in t
+    })
+
+
+def format_category_breakdown(mode: str = "paper") -> str:
+    """e.g. '  Sports: 12/15 (80.0%)\\n  Politics: 4/9 (44.4%)' — shows
+    where the system is actually performing well versus where it's still
+    noisy, instead of one aggregate number hiding real variation between
+    categories."""
+    categories = get_categories_with_closed_trades(mode=mode)
+    if not categories:
+        return ""
+    lines = []
+    for cat in categories:
+        acc = get_accuracy(mode=mode, category=cat)
+        if acc["total_closed"] > 0:
+            lines.append(f"  {cat}: {acc['wins']}/{acc['total_closed']} ({acc['win_rate_pct']}%)")
+    return "\n".join(lines)
+
+
 def format_accuracy_command_message() -> str:
     """Response for the /accuracy Telegram command — same numbers as the
     daily digest's running totals, available on demand."""
@@ -223,12 +250,18 @@ def format_accuracy_command_message() -> str:
         roi_note = f", ROI {paper_roi['roi_pct']:+.1f}%" if paper_roi["roi_pct"] is not None else ""
         lines.append(f"Paper: {paper['wins']}/{paper['total_closed']} correct "
                       f"({paper['win_rate_pct']}%){roi_note}")
+        breakdown = format_category_breakdown(mode="paper")
+        if breakdown:
+            lines.append(breakdown)
     else:
         lines.append("Paper: no resolved trades yet")
     if live["total_closed"] > 0:
         roi_note = f", ROI {live_roi['roi_pct']:+.1f}%" if live_roi["roi_pct"] is not None else ""
         lines.append(f"Live: {live['wins']}/{live['total_closed']} correct "
                       f"({live['win_rate_pct']}%){roi_note}")
+        breakdown = format_category_breakdown(mode="live")
+        if breakdown:
+            lines.append(breakdown)
     else:
         lines.append("Live: no resolved trades yet")
     trades = _load_trade_log()
