@@ -39,6 +39,7 @@ polymarket_api.fetch_event_id_from_slug), then reuses the existing,
 already-tested category lookup.
 """
 
+import json
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -146,6 +147,53 @@ def reconstruct_net_position(trades: list[dict], market_id: str, cutoff_ts: floa
     return net
 
 
+def _parse_json_field(value) -> list:
+    """outcomes/outcomePrices come back as JSON-encoded STRINGS (a known
+    Polymarket API quirk), e.g. '["Yes","No"]' — but handle a real list
+    too, defensively, in case that ever changes."""
+    if isinstance(value, list):
+        return value
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except json.JSONDecodeError:
+            return []
+    return []
+
+
+def extract_actual_outcome(market: dict) -> str:
+    """Confirmed against a real resolved-market response (2026-09-07):
+    there is NO 'resolvedOutcome' or 'outcome' field at all — the actual
+    winning outcome has to be derived from the parallel 'outcomes' and
+    'outcomePrices' arrays. The winner is whichever outcome settled at
+    (or nearest) a price of 1. Returns None if this can't be determined
+    confidently (missing/malformed data, or nothing near price 1 — i.e.
+    genuinely not decisively resolved despite being marked closed)."""
+    outcomes = _parse_json_field(market.get("outcomes"))
+    prices = _parse_json_field(market.get("outcomePrices"))
+    if not outcomes or not prices or len(outcomes) != len(prices):
+        return None
+    try:
+        prices_f = [float(p) for p in prices]
+    except (TypeError, ValueError):
+        return None
+    winner_idx = max(range(len(prices_f)), key=lambda i: prices_f[i])
+    if prices_f[winner_idx] < 0.5:
+        return None
+    return outcomes[winner_idx]
+
+
+def extract_event_id(market: dict) -> str:
+    """Confirmed against a real resolved-market response: there's a
+    nested 'events' list with the real event object directly embedded —
+    no slug resolution needed here (unlike trade records, which only
+    ever give an eventSlug, never a numeric ID)."""
+    events = market.get("events") or []
+    if events and isinstance(events, list):
+        return str(events[0].get("id") or "")
+    return ""
+
+
 def reconstruct_category_exposure(trades: list[dict], slug_to_category: dict, target_category: str,
                                     cutoff_ts: float) -> float:
     """Total net-long exposure a wallet had across ALL markets in a given
@@ -184,20 +232,11 @@ def run_backtest():
     for market in markets:
         condition_id = market.get("conditionId") or market.get("id")
         question = market.get("question", "unknown market")
-        actual_outcome = market.get("resolvedOutcome") or market.get("outcome")
+        actual_outcome = extract_actual_outcome(market)
         resolved_at_raw = market.get("closedTime") or market.get("endDate")
 
-        # Same defensive slug-first, ID-fallback pattern as the trades data.
-        market_slug = market.get("eventSlug")
-        if market_slug:
-            category = slug_to_category.get(market_slug)
-            if category is None:
-                event_id = fetch_event_id_from_slug(market_slug)
-                category = fetch_event_categories([event_id]).get(event_id, "Uncategorized") if event_id else "Uncategorized"
-                slug_to_category[market_slug] = category
-        else:
-            event_id = str(market.get("eventId") or "")
-            category = fetch_event_categories([event_id]).get(event_id, "Uncategorized") if event_id else "Uncategorized"
+        event_id = extract_event_id(market)
+        category = fetch_event_categories([event_id]).get(event_id, "Uncategorized") if event_id else "Uncategorized"
 
         if not condition_id or not actual_outcome or not resolved_at_raw:
             continue
