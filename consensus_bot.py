@@ -197,7 +197,7 @@ def run_regular_consensus(data):
         if momentum["trend"] == "growing":
             trade_eligible, skip_reason = True, ""
         elif momentum["trend"] == "steady":
-            trade_eligible, skip_reason = wallet_tracker.all_wallets_have_positive_roi(signal.agreeing_wallets)
+            trade_eligible, skip_reason = wallet_tracker.average_roi_is_positive(signal.agreeing_wallets)
         else:
             trade_eligible, skip_reason = False, f"momentum is '{momentum['trend']}'"
 
