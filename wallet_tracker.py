@@ -331,10 +331,14 @@ def passes_elite_trade_filter(wallet: str, category: str, position_size_usd: flo
     if baseline["avg_pct"] is None or baseline["sample_count"] < MIN_CONCENTRATION_BASELINE_SAMPLE:
         return False, "no established conviction baseline yet"
 
-    deviation = abs(concentration["concentration_pct"] - baseline["avg_pct"])
-    if deviation > CONVICTION_STANDOUT_THRESHOLD_PTS:
-        return False, (f"conviction stands out ({concentration['concentration_pct']}% vs usual "
-                        f"{baseline['avg_pct']}%, {deviation:.1f}pt deviation)")
+    # Only the HIGH side matters here — a bet SMALLER than their normal
+    # pattern is, if anything, more conservative than usual, never a
+    # gambling/tilt red flag. Only an unusually LARGE bet relative to
+    # their own baseline is the thing worth blocking.
+    deviation_above_baseline = concentration["concentration_pct"] - baseline["avg_pct"]
+    if deviation_above_baseline > CONVICTION_STANDOUT_THRESHOLD_PTS:
+        return False, (f"conviction stands out on the high side ({concentration['concentration_pct']}% vs usual "
+                        f"{baseline['avg_pct']}%, +{deviation_above_baseline:.1f}pt above normal)")
 
     return True, "passed all quality checks"
 
