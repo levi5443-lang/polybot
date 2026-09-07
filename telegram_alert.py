@@ -302,12 +302,15 @@ def _format_bet_type(price: float) -> str:
 
 
 def format_elite_mover_message(move: dict, pool_size: int = None, record_str: str = None,
-                                roi_str: str = None, concentration: dict = None) -> str:
+                                roi_str: str = None, conviction_str: str = None) -> str:
     """Build an alert for a single top-5 overall-ranked trader taking a
     new position — no agreement/threshold involved, just "this specific
     elite trader just moved." Shows the wallet's own stats (category
-    track record + overall ROI + portfolio concentration) so you can
-    judge the move on its own merits, not just its raw dollar size."""
+    track record + overall ROI + conviction vs. their own baseline) so
+    you can judge the move on its own merits, not just its raw dollar
+    size — and not just raw concentration in isolation, which can't
+    distinguish a rare high-conviction call from someone who always bets
+    big as a matter of course (see wallet_tracker.format_conviction_line)."""
     pool_note = f" (of {pool_size} tracked)" if pool_size else ""
     record_line = f"{move['category']} record: {record_str}\n" if record_str else ""
     roi_line = f"ROI: {roi_str}\n" if roi_str else ""
@@ -315,12 +318,7 @@ def format_elite_mover_message(move: dict, pool_size: int = None, record_str: st
     cur_price = move.get("cur_price", 0.0)
     bet_type_line = f"Bet type: {_format_bet_type(cur_price)} (buying at ${cur_price:.2f})\n" if cur_price else ""
 
-    concentration_line = ""
-    if concentration and concentration.get("concentration_pct") is not None:
-        concentration_line = (
-            f"Conviction: {concentration['concentration_pct']}% of their tracked portfolio "
-            f"(${concentration['total_open_usd']:,.0f} total open)\n"
-        )
+    conviction_line = f"Conviction: {conviction_str}\n" if conviction_str else ""
 
     return (
         f"⭐ *TOP {move['rank']} TRADER MOVE*  _[{move['category']}]_\n\n"
@@ -332,5 +330,5 @@ def format_elite_mover_message(move: dict, pool_size: int = None, record_str: st
         f"{bet_type_line}"
         f"{_format_resolution_and_return_lines(move.get('end_date', ''), move.get('cur_price', 0.0))}"
         f"Position size: ${move['size_usd']:,.0f}\n"
-        f"{concentration_line}"
+        f"{conviction_line}"
     )

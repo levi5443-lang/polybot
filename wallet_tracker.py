@@ -15,6 +15,7 @@ not the bot's own trades.
 
 import logging
 from datetime import datetime, timezone
+from collections import defaultdict
 
 from consensus_logic import Position
 from polymarket_api import check_market_resolution, polite_sleep
@@ -51,12 +52,26 @@ def record_observed_positions(all_positions: list[Position], category_map: dict)
     records = _load_records()
     new_positions = []
 
+    # Each wallet's current total portfolio, from THIS cycle's full
+    # snapshot — used to record what % of their portfolio each NEW
+    # position represents at the moment it's first observed. Building
+    # this up over time is what eventually lets us compare a wallet's
+    # CURRENT bet size against their own historical norm, instead of
+    # just showing a concentration number with no context for whether
+    # it's unusual for THEM specifically.
+    wallet_totals = defaultdict(float)
+    for p in all_positions:
+        wallet_totals[p.wallet] += p.size_usd
+
     for p in all_positions:
         key = _record_key(p.wallet, p.market_id, p.outcome)
         if key in records:
             continue  # already tracking this exact position
 
         category = category_map.get(p.event_id, "Uncategorized")
+        wallet_total = wallet_totals.get(p.wallet, 0)
+        concentration_at_entry = round(100 * p.size_usd / wallet_total, 1) if wallet_total > 0 else None
+
         records[key] = {
             "wallet": p.wallet,
             "market_id": p.market_id,
@@ -65,6 +80,7 @@ def record_observed_positions(all_positions: list[Position], category_map: dict)
             "category": category,
             "size_usd": p.size_usd,
             "entry_price": p.cur_price,  # price at the moment we first saw this position
+            "concentration_pct_at_entry": concentration_at_entry,
             "first_seen_at": datetime.now(timezone.utc).isoformat(),
             "status": "open",
             "actual_outcome": None,
@@ -213,6 +229,52 @@ def get_portfolio_concentration(wallet: str, position_size_usd: float) -> dict:
         return {"total_open_usd": 0.0, "concentration_pct": None}
     concentration_pct = round(100 * position_size_usd / total_open, 1)
     return {"total_open_usd": round(total_open, 2), "concentration_pct": concentration_pct}
+
+
+MIN_CONCENTRATION_BASELINE_SAMPLE = 3  # need at least this many prior bets before trusting "their usual %"
+
+
+def get_average_concentration(wallet: str, exclude_market_id: str = None, exclude_outcome: str = None) -> dict:
+    """A wallet's average portfolio-concentration-at-entry across their
+    OTHER recorded positions (open and closed) — their personal baseline
+    betting pattern. This is what actually answers "is 34% unusual for
+    THEM," rather than just reporting 34% in isolation, which can't
+    distinguish a disciplined trader making a rare high-conviction call
+    from someone who bets big every single time as a matter of course.
+    Excludes the position currently being evaluated (if given), so it
+    doesn't drag its own baseline toward itself. Returns {avg_pct,
+    sample_count} — avg_pct is None if there's no usable prior history
+    yet (either genuinely new to us, or all their history predates this
+    field being tracked — see record_observed_positions)."""
+    records = _load_records()
+    values = [
+        r["concentration_pct_at_entry"] for r in records.values()
+        if r["wallet"] == wallet
+        and r.get("concentration_pct_at_entry") is not None
+        and not (r["market_id"] == exclude_market_id and r["outcome"] == exclude_outcome)
+    ]
+    if not values:
+        return {"avg_pct": None, "sample_count": 0}
+    return {"avg_pct": round(sum(values) / len(values), 1), "sample_count": len(values)}
+
+
+def format_conviction_line(wallet: str, position_size_usd: float, market_id: str, outcome: str) -> str:
+    """The full conviction picture: this bet's concentration, AND
+    whether that's unusual for this specific wallet or just how they
+    always operate. Returns None if we can't compute a concentration at
+    all (no open-portfolio data)."""
+    concentration = get_portfolio_concentration(wallet, position_size_usd)
+    if concentration["concentration_pct"] is None:
+        return None
+
+    baseline = get_average_concentration(wallet, exclude_market_id=market_id, exclude_outcome=outcome)
+    if baseline["avg_pct"] is not None and baseline["sample_count"] >= MIN_CONCENTRATION_BASELINE_SAMPLE:
+        comparison = f" — vs their usual ~{baseline['avg_pct']}% ({baseline['sample_count']} prior bets)"
+    else:
+        comparison = " — no baseline yet to compare against"
+
+    return (f"{concentration['concentration_pct']}% of tracked portfolio "
+            f"(${concentration['total_open_usd']:,.0f} total open){comparison}")
 
 
 def format_wallet_roi(wallet: str) -> str:

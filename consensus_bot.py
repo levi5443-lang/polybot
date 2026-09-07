@@ -265,10 +265,12 @@ def run_elite_movers(data):
                   move["size_usd"])
         record_str = wallet_tracker.format_wallet_record_with_recent(move["wallet"], move["category"])
         roi_str = wallet_tracker.format_wallet_roi(move["wallet"])
-        concentration = wallet_tracker.get_portfolio_concentration(move["wallet"], move["size_usd"])
+        conviction_str = wallet_tracker.format_conviction_line(
+            move["wallet"], move["size_usd"], move["market_id"], move["outcome"]
+        )
         send_telegram_alert(format_elite_mover_message(
             move, pool_size=len(data["wallets"]), record_str=record_str, roi_str=roi_str,
-            concentration=concentration
+            conviction_str=conviction_str
         ))
 
         # Elite moves are single-wallet events (no "agreement" needed by
