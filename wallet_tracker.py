@@ -455,6 +455,24 @@ def get_wallet_realized_roi(wallet: str) -> dict:
     }
 
 
+def all_wallets_have_positive_roi(wallets: list[str]) -> tuple[bool, str]:
+    """True only if EVERY given wallet has a CONFIRMED positive overall
+    realized ROI — not just non-negative, and not "no data yet" treated
+    as a pass. Used to gate trading on 'steady' momentum consensus
+    signals: conviction isn't actively building, but the underlying
+    traders' own track records can still justify trusting it, PROVIDED
+    every single one of them has actually been profitable, not just
+    unproven. Returns (passed, reason) — reason names the first
+    disqualifying wallet found, for logging."""
+    for w in wallets:
+        roi = get_wallet_realized_roi(w)
+        if roi["roi_pct"] is None:
+            return False, f"{w} has no confirmed ROI yet"
+        if roi["roi_pct"] <= 0:
+            return False, f"{w} ROI is {roi['roi_pct']}% (not positive)"
+    return True, "all agreeing wallets have confirmed positive ROI"
+
+
 def rank_wallets_by_realized_roi(wallets: list[str]) -> list[str]:
     """Reorders a candidate pool by historical realized ROI% instead of
     Polymarket's own profit-rank ordering. Any wallet with at least ONE

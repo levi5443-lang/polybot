@@ -189,10 +189,20 @@ def run_regular_consensus(data):
         # get paper/live-traded — a signal we've never seen before ("new",
         # no prior cycle to compare against) does NOT count as growing,
         # same "prove it, don't assume it" standard applied everywhere
-        # else in this system. Alerts above still fire for every signal
-        # regardless — this only gates the trade itself.
-        if momentum["trend"] != "growing":
-            log.info("  -> not trading: momentum is '%s', not 'growing'.", momentum["trend"])
+        # else in this system. 'steady' is also tradeable, but only if
+        # EVERY agreeing wallet has a confirmed positive track record —
+        # conviction isn't actively building, so the bar shifts to
+        # "these are genuinely good traders" instead. Alerts above still
+        # fire for every signal regardless — this only gates the trade.
+        if momentum["trend"] == "growing":
+            trade_eligible, skip_reason = True, ""
+        elif momentum["trend"] == "steady":
+            trade_eligible, skip_reason = wallet_tracker.all_wallets_have_positive_roi(signal.agreeing_wallets)
+        else:
+            trade_eligible, skip_reason = False, f"momentum is '{momentum['trend']}'"
+
+        if not trade_eligible:
+            log.info("  -> not trading: %s", skip_reason)
             continue
 
         if PAPER_MODE:
