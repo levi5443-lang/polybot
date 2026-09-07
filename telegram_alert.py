@@ -247,8 +247,10 @@ def _format_resolution_and_return_lines(end_date: str, cur_price: float) -> str:
 def format_consensus_message(signal, total_tracked: int, wallet_ranks: dict = None,
                               pool_size: int = None, wallet_records: dict = None,
                               wallet_rois: dict = None, wallet_ages: dict = None,
-                              momentum_str: str = None, wallet_price_changes: dict = None) -> str:
+                              momentum_str: str = None, wallet_price_changes: dict = None,
+                              average_roi_str: str = None) -> str:
     """Build a readable alert message from a ConsensusSignal."""
+    avg_roi_line = f"Average ROI: {average_roi_str}\n" if average_roi_str else ""
     return (
         f"*Polymarket Consensus Signal*  _[{signal.category}]_\n\n"
         f"Market: {signal.market_question}\n"
@@ -257,6 +259,7 @@ def format_consensus_message(signal, total_tracked: int, wallet_ranks: dict = No
         f"{_format_rank_line(signal, wallet_ranks, pool_size)}"
         f"{_format_track_record_line(signal, wallet_ranks, wallet_records)}"
         f"{_format_roi_line(signal, wallet_ranks, wallet_rois)}"
+        f"{avg_roi_line}"
         f"{_format_freshness_line(signal, wallet_ranks, wallet_ages)}"
         f"{_format_price_move_line(signal, wallet_ranks, wallet_price_changes)}"
         f"{_format_momentum_line(momentum_str)}"

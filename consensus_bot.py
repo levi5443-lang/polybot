@@ -174,12 +174,13 @@ def run_regular_consensus(data):
             wallet_price_changes = wallet_tracker.get_price_changes(
                 signal.agreeing_wallets, signal.market_id, signal.outcome, signal.cur_price
             )
+            average_roi_str = wallet_tracker.format_average_roi(signal.agreeing_wallets)
             send_telegram_alert(format_consensus_message(
                 signal, len(top_wallets_in_cat),
                 wallet_ranks=data["wallet_overall_rank"], pool_size=len(data["wallets"]),
                 wallet_records=wallet_records, wallet_rois=wallet_rois,
                 wallet_ages=wallet_ages, momentum_str=momentum_str,
-                wallet_price_changes=wallet_price_changes
+                wallet_price_changes=wallet_price_changes, average_roi_str=average_roi_str
             ))
             _alerted_keys.add(key)
         else:

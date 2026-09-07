@@ -455,6 +455,27 @@ def get_wallet_realized_roi(wallet: str) -> dict:
     }
 
 
+def format_average_roi(wallets: list[str]) -> str:
+    """Display-friendly average ROI% across a group of wallets — shown
+    directly in Telegram alerts, distinct from average_roi_is_positive
+    (the strict trading gate, which requires EVERY wallet to have
+    confirmed data). This shows whatever data IS available, noting
+    coverage, rather than showing nothing just because one wallet in
+    the group hasn't resolved anything yet. e.g. '+45.2% (3/4 wallets)'
+    or 'no confirmed data yet' if none of them have any resolved
+    history at all."""
+    rois = []
+    for w in wallets:
+        roi = get_wallet_realized_roi(w)
+        if roi["roi_pct"] is not None:
+            rois.append(roi["roi_pct"])
+    if not rois:
+        return "no confirmed data yet"
+    avg = sum(rois) / len(rois)
+    sign = "+" if avg >= 0 else ""
+    return f"{sign}{avg:.1f}% ({len(rois)}/{len(wallets)} wallets)"
+
+
 def average_roi_is_positive(wallets: list[str]) -> tuple[bool, str]:
     """True if the AVERAGE realized ROI% across all given wallets is
     positive — one weaker or negative performer can be offset by
