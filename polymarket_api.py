@@ -118,6 +118,24 @@ PREFERRED_CATEGORY_LABELS = [
 ]
 
 
+def fetch_event_id_from_slug(slug: str) -> str:
+    """/trades only returns an eventSlug (e.g. 'mlb-min-cws-2026-09-06'),
+    never a numeric event ID — but fetch_event_categories needs a numeric
+    ID, since it calls /events/{id}/tags. This resolves slug -> real ID
+    via Gamma's dedicated single-event-by-slug endpoint. Returns "" if
+    the slug can't be resolved (never guess an ID)."""
+    try:
+        resp = requests.get(f"{GAMMA_API_BASE}/events/slug/{slug}", timeout=15)
+        resp.raise_for_status()
+        data = resp.json()
+    except requests.RequestException:
+        return ""
+    # Defensive: handle either a single event object or a list containing one.
+    if isinstance(data, list):
+        data = data[0] if data else {}
+    return str(data.get("id") or "")
+
+
 def fetch_event_categories(event_ids: list[str]) -> dict[str, str]:
     """Look up each event's category via the Gamma API's dedicated
     /events/{id}/tags endpoint. Checks the local cache first (see
