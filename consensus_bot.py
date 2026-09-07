@@ -263,10 +263,12 @@ def run_elite_movers(data):
         log.info("ELITE MOVE [%s]: #%d trader took '%s' on '%s' ($%.0f)",
                   move["category"], move["rank"], move["outcome"], move["market_question"],
                   move["size_usd"])
-        record_str = wallet_tracker.format_wallet_record(move["wallet"], move["category"])
+        record_str = wallet_tracker.format_wallet_record_with_recent(move["wallet"], move["category"])
         roi_str = wallet_tracker.format_wallet_roi(move["wallet"])
+        concentration = wallet_tracker.get_portfolio_concentration(move["wallet"], move["size_usd"])
         send_telegram_alert(format_elite_mover_message(
-            move, pool_size=len(data["wallets"]), record_str=record_str, roi_str=roi_str
+            move, pool_size=len(data["wallets"]), record_str=record_str, roi_str=roi_str,
+            concentration=concentration
         ))
 
         # Elite moves are single-wallet events (no "agreement" needed by

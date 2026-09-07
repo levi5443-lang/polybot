@@ -166,6 +166,55 @@ def format_wallet_record(wallet: str, category: str) -> str:
     return f"{rec['wins']}-{rec['losses']}, {rec['win_rate_pct']}%"
 
 
+def get_recent_form(wallet: str, category: str, n: int = 5) -> dict:
+    """Win/loss over just the wallet's LAST n resolved picks in this
+    category — not their whole career. A strong career record can hide a
+    current cold streak (or hide a current hot streak the career number
+    hasn't caught up to yet). Returns {wins, total}."""
+    records = _load_records()
+    resolved = [
+        r for r in records.values()
+        if r["wallet"] == wallet and r["category"] == category
+        and r["status"] == "closed" and r.get("resolved_at")
+    ]
+    resolved.sort(key=lambda r: r["resolved_at"], reverse=True)
+    recent = resolved[:n]
+    wins = sum(1 for r in recent if r["correct"])
+    return {"wins": wins, "total": len(recent)}
+
+
+def format_wallet_record_with_recent(wallet: str, category: str, n: int = 5) -> str:
+    """Same as format_wallet_record, but appends recent form too — used
+    specifically for Elite Mover alerts, where a single trader's CURRENT
+    form matters more than in a multi-trader consensus message. Only
+    appends if there's at least 2 recent picks to speak of (otherwise
+    "recent 1: 1-0" adds noise, not signal)."""
+    base = format_wallet_record(wallet, category)
+    recent = get_recent_form(wallet, category, n=n)
+    if recent["total"] >= 2:
+        base += f" (recent {recent['total']}: {recent['wins']}-{recent['total'] - recent['wins']})"
+    return base
+
+
+def get_portfolio_concentration(wallet: str, position_size_usd: float) -> dict:
+    """What % of a wallet's total CURRENTLY OPEN tracked portfolio this
+    one position represents. The same $5,000 bet means something very
+    different from someone with a $14,700 total open book versus someone
+    with a $200,000 one — this is what actually distinguishes "a big
+    swing for them" from "just another position." Returns
+    {total_open_usd, concentration_pct} — concentration_pct is None if
+    we can't compute a meaningful total (e.g. total is 0)."""
+    records = _load_records()
+    total_open = sum(
+        r["size_usd"] for r in records.values()
+        if r["wallet"] == wallet and r["status"] == "open"
+    )
+    if total_open <= 0:
+        return {"total_open_usd": 0.0, "concentration_pct": None}
+    concentration_pct = round(100 * position_size_usd / total_open, 1)
+    return {"total_open_usd": round(total_open, 2), "concentration_pct": concentration_pct}
+
+
 def format_wallet_roi(wallet: str) -> str:
     """Short display string for a wallet's OVERALL realized ROI% (every
     category combined — this is the same number driving the pool
