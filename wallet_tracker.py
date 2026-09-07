@@ -277,6 +277,68 @@ def format_conviction_line(wallet: str, position_size_usd: float, market_id: str
             f"(${concentration['total_open_usd']:,.0f} total open){comparison}")
 
 
+def last_n_all_correct(wallet: str, category: str, n: int = 2) -> bool:
+    """True if the wallet's last n resolved picks in this category,
+    chronologically, were ALL correct — a stricter, recency-focused
+    check on top of an aggregate win rate, which can hide a current cold
+    streak behind an otherwise-strong record. False if there aren't even
+    n resolved picks yet (never guess "probably fine")."""
+    records = _load_records()
+    resolved = [
+        r for r in records.values()
+        if r["wallet"] == wallet and r["category"] == category
+        and r["status"] == "closed" and r.get("resolved_at")
+    ]
+    resolved.sort(key=lambda r: r["resolved_at"], reverse=True)
+    recent = resolved[:n]
+    if len(recent) < n:
+        return False
+    return all(r["correct"] for r in recent)
+
+
+CONVICTION_STANDOUT_THRESHOLD_PTS = 10  # how many points above/below baseline still counts as "in line with normal"
+ELITE_TRADE_MIN_WIN_RATE_PCT = 66.0
+ELITE_TRADE_MIN_RESOLVED = 2
+ELITE_TRADE_RECENT_STREAK = 2
+
+
+def passes_elite_trade_filter(wallet: str, category: str, position_size_usd: float,
+                                market_id: str, outcome: str) -> tuple[bool, str]:
+    """The full quality gate for paper-trading a Top Trader (Elite Mover)
+    signal: a proven category track record, a currently live winning
+    streak (not just a good historical average), and a conviction level
+    that's consistent with the wallet's own normal pattern rather than a
+    one-off outlier spike — since an outlier could just as easily be
+    tilt/gambling as genuine extra confidence. ALL conditions must pass.
+    Returns (passed, reason) — reason explains the specific failure (or
+    success) for logging, so it's clear WHY a signal did or didn't get
+    traded."""
+    rec = get_wallet_category_record(wallet, category)
+    if rec["total_resolved"] < ELITE_TRADE_MIN_RESOLVED:
+        return False, f"only {rec['total_resolved']} resolved pick(s) in {category} (need {ELITE_TRADE_MIN_RESOLVED}+)"
+
+    if rec["win_rate_pct"] is None or rec["win_rate_pct"] <= ELITE_TRADE_MIN_WIN_RATE_PCT:
+        return False, f"win rate {rec['win_rate_pct']}% (need >{ELITE_TRADE_MIN_WIN_RATE_PCT}%)"
+
+    if not last_n_all_correct(wallet, category, n=ELITE_TRADE_RECENT_STREAK):
+        return False, f"last {ELITE_TRADE_RECENT_STREAK} picks in {category} weren't all correct"
+
+    concentration = get_portfolio_concentration(wallet, position_size_usd)
+    if concentration["concentration_pct"] is None:
+        return False, "no portfolio data available to assess conviction"
+
+    baseline = get_average_concentration(wallet, exclude_market_id=market_id, exclude_outcome=outcome)
+    if baseline["avg_pct"] is None or baseline["sample_count"] < MIN_CONCENTRATION_BASELINE_SAMPLE:
+        return False, "no established conviction baseline yet"
+
+    deviation = abs(concentration["concentration_pct"] - baseline["avg_pct"])
+    if deviation > CONVICTION_STANDOUT_THRESHOLD_PTS:
+        return False, (f"conviction stands out ({concentration['concentration_pct']}% vs usual "
+                        f"{baseline['avg_pct']}%, {deviation:.1f}pt deviation)")
+
+    return True, "passed all quality checks"
+
+
 def format_wallet_roi(wallet: str) -> str:
     """Short display string for a wallet's OVERALL realized ROI% (every
     category combined — this is the same number driving the pool

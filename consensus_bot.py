@@ -151,9 +151,15 @@ def run_regular_consensus(data):
                   signal.category, signal.count, len(top_wallets_in_cat),
                   signal.outcome, signal.market_question, signal.total_size_usd)
 
+        import wallet_tracker
+        import signal_momentum
+        # Computed every cycle regardless of alert status — momentum needs
+        # to be current at the moment we decide whether to TRADE, not just
+        # whatever it was the first time this signal got alerted.
+        momentum = signal_momentum.get_momentum(signal.market_id, signal.outcome)
+        momentum_str = signal_momentum.format_momentum(momentum)
+
         if key not in _alerted_keys:
-            import wallet_tracker
-            import signal_momentum
             wallet_records = {
                 w: wallet_tracker.format_wallet_record(w, signal.category)
                 for w in signal.agreeing_wallets
@@ -168,8 +174,6 @@ def run_regular_consensus(data):
             wallet_price_changes = wallet_tracker.get_price_changes(
                 signal.agreeing_wallets, signal.market_id, signal.outcome, signal.cur_price
             )
-            momentum = signal_momentum.get_momentum(signal.market_id, signal.outcome)
-            momentum_str = signal_momentum.format_momentum(momentum)
             send_telegram_alert(format_consensus_message(
                 signal, len(top_wallets_in_cat),
                 wallet_ranks=data["wallet_overall_rank"], pool_size=len(data["wallets"]),
@@ -180,6 +184,16 @@ def run_regular_consensus(data):
             _alerted_keys.add(key)
         else:
             log.info("(already alerted — skipping duplicate ping)")
+
+        # TRADE ELIGIBILITY: only signals with CONFIRMED growing momentum
+        # get paper/live-traded — a signal we've never seen before ("new",
+        # no prior cycle to compare against) does NOT count as growing,
+        # same "prove it, don't assume it" standard applied everywhere
+        # else in this system. Alerts above still fire for every signal
+        # regardless — this only gates the trade itself.
+        if momentum["trend"] != "growing":
+            log.info("  -> not trading: momentum is '%s', not 'growing'.", momentum["trend"])
+            continue
 
         if PAPER_MODE:
             execute_trade(signal)
@@ -285,6 +299,20 @@ def run_elite_movers(data):
             event_id=move.get("event_id", ""), token_id=move.get("token_id", ""),
             end_date=move.get("end_date", ""), cur_price=move.get("cur_price", 0.0),
         )
+
+        # TRADE ELIGIBILITY: only follow a top-5 trader's move if their
+        # OWN category track record backs it up (proven win rate, a live
+        # winning streak) AND this bet's conviction is in line with their
+        # normal pattern — an outlier-sized bet could just as easily be
+        # a one-off gamble as genuine extra confidence. The alert above
+        # still fires regardless — this only gates the trade itself.
+        passed, reason = wallet_tracker.passes_elite_trade_filter(
+            move["wallet"], move["category"], move["size_usd"], move["market_id"], move["outcome"]
+        )
+        if not passed:
+            log.info("  -> not trading: %s", reason)
+            continue
+
         if PAPER_MODE:
             execute_trade(signal)
         else:
