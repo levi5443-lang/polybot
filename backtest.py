@@ -56,7 +56,7 @@ LOOKBACK_HOURS = 24                 # how long before resolution to snapshot pos
 CATEGORY_CONSENSUS_THRESHOLD = 4    # matches the live system
 TOP_N_PER_CATEGORY = 10             # matches the live system
 CANDIDATE_POOL_SIZE = 50            # matches what the live leaderboard actually returns
-MARKETS_TO_TEST = 40
+MARKETS_TO_TEST = 75
 EXCLUDED_CATEGORIES = ["Crypto"]    # matches the live system
 
 

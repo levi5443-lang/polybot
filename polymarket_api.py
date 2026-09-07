@@ -72,14 +72,17 @@ def fetch_trades(wallet: str = None, market: str = None, limit: int = 500) -> li
 
 def fetch_resolved_markets(limit: int = 100, offset: int = 0) -> list[dict]:
     """Closed/resolved markets with their final outcome, for backtesting.
-    NOTE: no guaranteed sort order confirmed for this endpoint — fine for
-    backtest.py's broad historical sampling, but NOT reliable for checking
-    whether one SPECIFIC market has resolved (a specific market can be
-    resolved and still not appear in these first N results). Use
-    check_market_resolution() below for that instead."""
+    Explicitly sorted newest-first by ID (same proven proxy-for-recency
+    pattern used for fetch_newest_events) — without this, results could
+    be an arbitrary, possibly very old slice of Polymarket's ENTIRE
+    history, easily falling outside any tracked wallet's visible trade
+    window (fetch_trades is capped at 500 fills per wallet). Still not
+    reliable for checking whether one SPECIFIC market has resolved (a
+    resolved market has no guarantee of appearing in these first N
+    results) — use check_market_resolution() below for that instead."""
     resp = requests.get(
         f"{GAMMA_API_BASE}/markets",
-        params={"closed": "true", "limit": limit, "offset": offset},
+        params={"closed": "true", "order": "id", "ascending": "false", "limit": limit, "offset": offset},
         timeout=15,
     )
     resp.raise_for_status()
