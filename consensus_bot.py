@@ -153,6 +153,7 @@ def run_regular_consensus(data):
 
         if key not in _alerted_keys:
             import wallet_tracker
+            import signal_momentum
             wallet_records = {
                 w: wallet_tracker.format_wallet_record(w, signal.category)
                 for w in signal.agreeing_wallets
@@ -161,10 +162,16 @@ def run_regular_consensus(data):
                 w: wallet_tracker.format_wallet_roi(w)
                 for w in signal.agreeing_wallets
             }
+            wallet_ages = wallet_tracker.get_position_ages(
+                signal.agreeing_wallets, signal.market_id, signal.outcome
+            )
+            momentum = signal_momentum.get_momentum(signal.market_id, signal.outcome)
+            momentum_str = signal_momentum.format_momentum(momentum)
             send_telegram_alert(format_consensus_message(
                 signal, len(top_wallets_in_cat),
                 wallet_ranks=data["wallet_overall_rank"], pool_size=len(data["wallets"]),
-                wallet_records=wallet_records, wallet_rois=wallet_rois
+                wallet_records=wallet_records, wallet_rois=wallet_rois,
+                wallet_ages=wallet_ages, momentum_str=momentum_str
             ))
             _alerted_keys.add(key)
         else:
@@ -205,9 +212,12 @@ def run_early_movers(data):
                 w: wallet_tracker.format_wallet_roi(w)
                 for w in signal.agreeing_wallets
             }
+            wallet_ages = wallet_tracker.get_position_ages(
+                signal.agreeing_wallets, signal.market_id, signal.outcome
+            )
             send_telegram_alert(format_early_mover_message(
                 signal, wallet_ranks=data["wallet_overall_rank"], pool_size=len(data["wallets"]),
-                wallet_records=wallet_records, wallet_rois=wallet_rois
+                wallet_records=wallet_records, wallet_rois=wallet_rois, wallet_ages=wallet_ages
             ))
             _alerted_early_mover_keys.add(key)
 

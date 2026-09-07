@@ -170,6 +170,32 @@ def _format_roi_line(signal, wallet_ranks: dict = None, wallet_rois: dict = None
     return "ROI: " + " | ".join(parts) + "\n"
 
 
+def _format_freshness_line(signal, wallet_ranks: dict = None, wallet_ages: dict = None) -> str:
+    """e.g. 'Entered: #3 (2h ago) | #17 (3h ago) | #28 (4d ago)' — how
+    long ago each agreeing wallet actually entered, not when the signal
+    fired. Four traders piling in within the same hour reads very
+    differently than four who each got in independently over weeks.
+    wallet_ages is {wallet: age_str}, from wallet_tracker.get_position_ages()."""
+    if not wallet_ranks or not wallet_ages:
+        return ""
+    wallets_sorted = sorted(
+        (w for w in signal.agreeing_wallets if w in wallet_ranks and w in wallet_ages),
+        key=lambda w: wallet_ranks[w]
+    )
+    if not wallets_sorted:
+        return ""
+    parts = [f"#{wallet_ranks[w]} ({wallet_ages[w]})" for w in wallets_sorted]
+    return "Entered: " + " | ".join(parts) + "\n"
+
+
+def _format_momentum_line(momentum_str: str) -> str:
+    """e.g. 'Momentum: growing (2→3→4)' — omitted entirely for a
+    brand-new signal with no history to compare against yet."""
+    if not momentum_str:
+        return ""
+    return f"Momentum: {momentum_str}\n"
+
+
 def _format_resolution_date(end_date: str) -> str:
     """Turns Polymarket's raw endDate into something readable, e.g.
     'Sep 15, 2026'. Returns 'unknown' if missing/malformed."""
@@ -202,7 +228,8 @@ def _format_resolution_and_return_lines(end_date: str, cur_price: float) -> str:
 
 def format_consensus_message(signal, total_tracked: int, wallet_ranks: dict = None,
                               pool_size: int = None, wallet_records: dict = None,
-                              wallet_rois: dict = None) -> str:
+                              wallet_rois: dict = None, wallet_ages: dict = None,
+                              momentum_str: str = None) -> str:
     """Build a readable alert message from a ConsensusSignal."""
     return (
         f"*Polymarket Consensus Signal*  _[{signal.category}]_\n\n"
@@ -212,13 +239,16 @@ def format_consensus_message(signal, total_tracked: int, wallet_ranks: dict = No
         f"{_format_rank_line(signal, wallet_ranks, pool_size)}"
         f"{_format_track_record_line(signal, wallet_ranks, wallet_records)}"
         f"{_format_roi_line(signal, wallet_ranks, wallet_rois)}"
+        f"{_format_freshness_line(signal, wallet_ranks, wallet_ages)}"
+        f"{_format_momentum_line(momentum_str)}"
         f"{_format_resolution_and_return_lines(signal.end_date, signal.cur_price)}"
         f"Aggregate size: ${signal.total_size_usd:,.0f}\n"
     )
 
 
 def format_early_mover_message(signal, wallet_ranks: dict = None, pool_size: int = None,
-                                wallet_records: dict = None, wallet_rois: dict = None) -> str:
+                                wallet_records: dict = None, wallet_rois: dict = None,
+                                wallet_ages: dict = None) -> str:
     """Build a distinctly-labeled alert for a brand-new market where
     multiple tracked wallets are already positioned. Deliberately doesn't
     show "X/total_tracked" like the regular consensus message — early
@@ -231,6 +261,7 @@ def format_early_mover_message(signal, wallet_ranks: dict = None, pool_size: int
         f"{_format_rank_line(signal, wallet_ranks, pool_size)}"
         f"{_format_track_record_line(signal, wallet_ranks, wallet_records)}"
         f"{_format_roi_line(signal, wallet_ranks, wallet_rois)}"
+        f"{_format_freshness_line(signal, wallet_ranks, wallet_ages)}"
         f"{_format_resolution_and_return_lines(signal.end_date, signal.cur_price)}"
         f"Aggregate size: ${signal.total_size_usd:,.0f}\n"
     )

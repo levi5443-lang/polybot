@@ -180,6 +180,41 @@ def format_wallet_roi(wallet: str) -> str:
     return f"{sign}{roi['roi_pct']}% ({roi['resolved_count']} resolved)"
 
 
+def _format_age(iso_timestamp: str) -> str:
+    """e.g. '2h ago', '3d ago' — same style as trade_tracker's version,
+    duplicated here rather than shared since it's a tiny, self-contained
+    helper (consistent with this codebase's existing per-module pattern)."""
+    if not iso_timestamp:
+        return "unknown"
+    try:
+        seen = datetime.fromisoformat(iso_timestamp)
+    except (ValueError, TypeError):
+        return "unknown"
+    delta = datetime.now(timezone.utc) - seen
+    hours = delta.total_seconds() / 3600
+    if hours < 1:
+        return f"{int(delta.total_seconds() / 60)}m ago"
+    if hours < 24:
+        return f"{int(hours)}h ago"
+    return f"{int(hours / 24)}d ago"
+
+
+def get_position_ages(wallets: list[str], market_id: str, outcome: str) -> dict:
+    """For each wallet, how long ago THEY specifically entered this exact
+    position — not when the signal fired, when they actually got in.
+    Four traders who all entered within the same hour is a very different
+    signal than four who each got in independently over three weeks.
+    Returns {wallet: age_str}, 'unknown' for anything we don't have a
+    first_seen_at for (e.g. positions logged before this field existed)."""
+    records = _load_records()
+    ages = {}
+    for w in wallets:
+        key = _record_key(w, market_id, outcome)
+        rec = records.get(key)
+        ages[w] = _format_age(rec["first_seen_at"]) if rec else "unknown"
+    return ages
+
+
 def get_wallet_realized_roi(wallet: str) -> dict:
     """Dollar-weighted realized ROI% across ALL of a wallet's resolved
     positions, in every category combined — not a naive average of each

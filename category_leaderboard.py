@@ -134,6 +134,8 @@ def compute_category_consensus(data: dict, threshold: int = CATEGORY_CONSENSUS_T
     category and counted against that category's own wallet list (not the
     global pool).
     """
+    import signal_momentum
+
     signals = []
     for cat, top_wallets in data["category_top_wallets"].items():
         top_set = set(top_wallets)
@@ -141,6 +143,16 @@ def compute_category_consensus(data: dict, threshold: int = CATEGORY_CONSENSUS_T
             p for p in data["all_positions"]
             if p.wallet in top_set and data["category_map"].get(p.event_id, "Uncategorized") == cat
         ]
+
+        # Track momentum at EVERY agreement level (even just 1 wallet) —
+        # not only signals that already meet the alert threshold. This
+        # way, by the time something first crosses the real threshold and
+        # triggers its one-time alert, real multi-cycle history (e.g.
+        # "1→2→3→4") already exists to show, instead of every signal's
+        # first alert always reading "new" with nothing to compare to.
+        for s in compute_consensus(cat_positions, threshold=1):
+            signal_momentum.record_and_get_momentum(s.market_id, s.outcome, s.count)
+
         cat_signals = compute_consensus(cat_positions, threshold=threshold)
         for s in cat_signals:
             s.category = cat  # already implied by construction, but explicit beats implicit
