@@ -53,11 +53,17 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 log = logging.getLogger("backtest")
 
 LOOKBACK_HOURS = 24                 # how long before resolution to snapshot positions
-CATEGORY_CONSENSUS_THRESHOLD = 4    # matches the live system
+CATEGORY_CONSENSUS_THRESHOLD = 2    # ⚠️ TEMPORARY DIAGNOSTIC — was 4. See note below.
 TOP_N_PER_CATEGORY = 10             # matches the live system
 CANDIDATE_POOL_SIZE = 50            # matches what the live leaderboard actually returns
-MARKETS_TO_TEST = 75
+MARKETS_TO_TEST = 200               # ⚠️ TEMPORARY DIAGNOSTIC — was 75, widened to find ANY hit
 EXCLUDED_CATEGORIES = ["Crypto"]    # matches the live system
+
+# DIAGNOSTIC MODE: threshold and sample size both loosened to check whether
+# the pipeline can produce ANY result at all, before trusting a zero-hit
+# result as a genuine "this is rare" finding rather than a lingering bug.
+# Once you've confirmed non-zero hits appear, put these back to
+# CATEGORY_CONSENSUS_THRESHOLD=4 and MARKETS_TO_TEST=75 for a real reading.
 
 
 @dataclass
