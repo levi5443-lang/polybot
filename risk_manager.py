@@ -1,18 +1,18 @@
 """
-risk_manager.py — position sizing and daily loss cap for live execution.
+risk_manager.py — position sizing for live execution.
 
 This is the safety layer that sits BETWEEN a consensus signal and an actual
-order. It answers two questions every time execute_trade() considers
-placing a real order:
-
-  1. How much should this trade be sized at? (POSITION_SIZE_PCT of current
-     wallet balance)
-  2. Are we allowed to trade at all right now? (has today's realized loss
-     already hit DAILY_LOSS_CAP_USD?)
+order. It answers: how much should this trade be sized at? (POSITION_SIZE_PCT
+of current wallet balance, never pushing total open live exposure past
+TOTAL_EXPOSURE_CAP_PCT).
 
 Trades this bot places are recorded to a local JSON ledger (TRADE_LOG_FILE)
-so the daily loss check has something to work from — Polymarket's own API
-doesn't give a clean "today's realized P&L" figure, so we track our own.
+so exposure can be computed from real open positions rather than guessed.
+
+There used to also be a daily realized-loss cap (DAILY_LOSS_CAP_USD) that
+blocked new live trades once today's realized losses hit $100 — removed
+at Levi's request (2026-09-08). The only remaining per-trade risk controls
+are position sizing and the total exposure cap below.
 
 IMPORTANT: this module's math is fully unit-testable and IS tested. What is
 NOT tested (because it can't be, without a funded live wallet) is whether
@@ -26,7 +26,6 @@ from datetime import datetime, timezone
 log = logging.getLogger("risk_manager")
 
 POSITION_SIZE_PCT = 0.02      # 2% of wallet balance per trade
-DAILY_LOSS_CAP_USD = 100.0    # stop opening new trades once today's realized losses hit this
 TOTAL_EXPOSURE_CAP_PCT = 0.26 # never have more than this fraction of the wallet across ALL open live positions combined
 
 # Shared across both services (worker + dashboard) — this is what makes
@@ -174,32 +173,7 @@ def record_trade_closed(market_id: str, outcome: str, realized_pnl: float) -> No
     _save_trade_log(trades)
 
 
-def todays_realized_loss_usd() -> float:
-    """Sum of realized LIVE losses (negative P&L only) on trades closed
-    today (UTC calendar day). Paper trades never count toward this — the
-    cap is about real money, not tracked accuracy. Wins don't offset this
-    either — the cap limits how much can be LOST in a day, not net P&L."""
-    trades = _load_trade_log()
-    today = datetime.now(timezone.utc).date()
-    total_loss = 0.0
-    for t in trades:
-        if t.get("mode", "live") != "live":
-            continue
-        if t["status"] != "closed" or t["closed_at"] is None:
-            continue
-        closed_date = datetime.fromisoformat(t["closed_at"]).date()
-        if closed_date != today:
-            continue
-        pnl = t.get("realized_pnl") or 0
-        if pnl < 0:
-            total_loss += abs(pnl)
-    return total_loss
-
-
-def daily_loss_cap_reached() -> bool:
-    loss = todays_realized_loss_usd()
-    reached = loss >= DAILY_LOSS_CAP_USD
-    if reached:
-        log.warning("Daily loss cap reached: $%.2f realized loss today (cap=$%.2f). Blocking new trades.",
-                     loss, DAILY_LOSS_CAP_USD)
-    return reached
+# todays_realized_loss_usd() / daily_loss_cap_reached() were removed here
+# along with DAILY_LOSS_CAP_USD (2026-09-08, Levi's request) — there is no
+# longer a daily realized-loss cap blocking new live trades. Position
+# sizing and the total exposure cap above are the only remaining controls.

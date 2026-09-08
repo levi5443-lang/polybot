@@ -196,21 +196,28 @@ def run_regular_consensus(data):
         else:
             log.info("(already alerted — skipping duplicate ping)")
 
-        # TRADE ELIGIBILITY: previously gated behind confirmed momentum
-        # (growing, or steady with every agreeing wallet's average ROI
-        # positive) before a signal could reach a trade decision. Removed
-        # at Levi's request (2026-09-08) — every signal that clears the
-        # category consensus threshold above now gets the same
-        # Approve/Reject treatment regardless of momentum; his own tap is
-        # the filter, matching early movers and elite movers.
+        # TRADE ELIGIBILITY: split by mode, per Levi's request (2026-09-08).
+        # LIVE trades: no momentum gate — every signal that clears the
+        # category consensus threshold above gets an Approve/Reject
+        # prompt regardless of momentum; his own tap is the filter here,
+        # matching early movers and elite movers.
+        # PAPER trades: DO gate on momentum — only logged as a paper
+        # trade (for accuracy tracking) if momentum is 'steady' or
+        # 'growing'. The Telegram alert message itself always shows
+        # momentum either way (see momentum_str above) — this only
+        # controls whether a paper trade gets recorded.
         if PAPER_MODE:
-            execute_trade(signal, signal_type="consensus")
+            if momentum["trend"] in ("steady", "growing"):
+                execute_trade(signal, signal_type="consensus")
+            else:
+                log.info("  -> not paper-trading: momentum is '%s' (needs steady or growing)",
+                          momentum["trend"])
         else:
             request_live_trade(signal, signal_type="consensus")
 
 
 def run_early_movers(data):
-    signals = find_early_movers(data["all_positions"], data["category_map"])
+    signals = find_early_movers(data["all_positions"], data["category_map"], data["wallet_overall_rank"])
     if not signals:
         log.info("No early-mover signals this pass (threshold=%d).", MIN_EARLY_MOVERS)
         return
@@ -251,8 +258,25 @@ def run_early_movers(data):
             ))
             _alerted_early_mover_keys.add(key)
 
+            # TRADE ELIGIBILITY, per Levi's request (2026-09-08):
+            # LIVE: no extra gate here — the wallet quality filter already
+            # applied in find_early_movers() (top-20 rank, 5+ resolved,
+            # >66% win rate) is enough; every signal that clears it gets
+            # an Approve/Reject prompt.
+            # PAPER: additionally requires every agreeing wallet to have
+            # its last 2 resolved picks (overall) both correct, AND the
+            # group's average realized ROI to be positive — a stricter
+            # bar than live, since paper trades are what builds the
+            # accuracy track record.
             if PAPER_MODE:
-                execute_trade(signal, signal_type="early_mover")
+                streak_ok, streak_reason = wallet_tracker.all_wallets_have_recent_streak(
+                    signal.agreeing_wallets, n=2
+                )
+                roi_ok, roi_reason = wallet_tracker.average_roi_is_positive(signal.agreeing_wallets)
+                if streak_ok and roi_ok:
+                    execute_trade(signal, signal_type="early_mover")
+                else:
+                    log.info("  -> not paper-trading: %s", streak_reason if not streak_ok else roi_reason)
             else:
                 request_live_trade(signal, signal_type="early_mover")
         else:

@@ -169,6 +169,27 @@ def get_wallet_category_record(wallet: str, category: str) -> dict:
     }
 
 
+def get_wallet_overall_record(wallet: str) -> dict:
+    """Same shape as get_wallet_category_record, but across EVERY
+    category combined — used where a decision is about the wallet
+    overall rather than its performance in one specific category (e.g.
+    early movers' wallet-quality gate, which pairs with wallet_overall_rank,
+    itself an all-categories-combined ranking)."""
+    records = _load_records()
+    closed = [
+        r for r in records.values()
+        if r["wallet"] == wallet and r["status"] == "closed"
+    ]
+    wins = sum(1 for r in closed if r["correct"])
+    total = len(closed)
+    return {
+        "wins": wins,
+        "losses": total - wins,
+        "total_resolved": total,
+        "win_rate_pct": round(100 * wins / total, 1) if total > 0 else None,
+    }
+
+
 def format_wallet_record(wallet: str, category: str) -> str:
     """Short display string for a Telegram message, e.g. '12-4, 75%'
     (confident sample), '1-0, 100% (early)' (below MIN_SAMPLE_SIZE — real
@@ -294,6 +315,34 @@ def last_n_all_correct(wallet: str, category: str, n: int = 2) -> bool:
     if len(recent) < n:
         return False
     return all(r["correct"] for r in recent)
+
+
+def last_n_all_correct_overall(wallet: str, n: int = 2) -> bool:
+    """Same as last_n_all_correct, but across EVERY category combined
+    rather than one specific category — used for early movers' paper-
+    trade gate, which is about the wallet's current form overall, not
+    within whatever category this particular market happens to be in."""
+    records = _load_records()
+    resolved = [
+        r for r in records.values()
+        if r["wallet"] == wallet and r["status"] == "closed" and r.get("resolved_at")
+    ]
+    resolved.sort(key=lambda r: r["resolved_at"], reverse=True)
+    recent = resolved[:n]
+    if len(recent) < n:
+        return False
+    return all(r["correct"] for r in recent)
+
+
+def all_wallets_have_recent_streak(wallets: list[str], n: int = 2) -> tuple[bool, str]:
+    """True only if EVERY given wallet's last n resolved picks (overall,
+    all categories combined) were all correct. Used to gate early-mover
+    PAPER trades — one wallet without a current streak fails the whole
+    group, same all-or-nothing pattern as average_roi_is_positive."""
+    for w in wallets:
+        if not last_n_all_correct_overall(w, n=n):
+            return False, f"{w} doesn't have its last {n} picks all correct"
+    return True, f"all {len(wallets)} wallet(s) have their last {n} picks correct"
 
 
 CONVICTION_STANDOUT_THRESHOLD_PTS = 10  # how many points above/below baseline still counts as "in line with normal"
