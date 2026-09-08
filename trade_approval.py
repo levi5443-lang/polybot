@@ -211,8 +211,14 @@ def _execute_approved_trade(pending_record: dict) -> str:
 
     size_usd = risk_manager.compute_trade_size_usd(balance)
     if size_usd < 1.0:
-        return (f"Blocked by the 26% total exposure cap (balance ${balance:,.2f}) "
-                f"— no action taken.")
+        # Includes which wallet address the bot is actually checking —
+        # added 2026-09-08 so a wrong/mismatched POLYMARKET_PRIVATE_KEY is
+        # visible right here in Telegram (compare against your real
+        # funded wallet's address) instead of needing server logs pulled
+        # every time this comes up.
+        wallet_address = execution.get_wallet_address()
+        return (f"Blocked by the 26% total exposure cap (balance ${balance:,.2f} "
+                f"on wallet {wallet_address}) — no action taken.")
 
     try:
         resp = execution.place_market_buy(token_id, size_usd)

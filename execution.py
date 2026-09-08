@@ -110,6 +110,23 @@ def _get_client():
             "Real execution cannot proceed without it."
         )
 
+    # Log which address this key actually resolves to. A wrong or
+    # mismatched key never errors here — eth_account happily derives SOME
+    # valid address from any well-formed hex key, it just won't be the
+    # funded wallet's address, and the bot would go on to correctly (and
+    # silently) report a real $0.00 balance for that other wallet. This
+    # line is the one place that lets Levi directly compare "the address
+    # the bot is actually using" against his real funded wallet, instead
+    # of guessing whether a newly-pasted key took effect. (2026-09-08)
+    try:
+        from eth_account import Account
+        derived_address = Account.from_key(private_key).address
+        log.info("POLYMARKET_PRIVATE_KEY resolves to wallet address: %s", derived_address)
+    except Exception as e:
+        derived_address = None
+        log.warning("Could not derive an address from POLYMARKET_PRIVATE_KEY "
+                    "to sanity-check it (this may indicate a malformed key): %s", e)
+
     # signature_type=0: plain EOA — trades directly as the wallet behind
     # POLYMARKET_PRIVATE_KEY, no proxy contract, no funder address. See the
     # module docstring above for why this changed from signature_type=2.
@@ -123,7 +140,23 @@ def _get_client():
     # NOTE: verify this call still matches the current py-clob-client
     # version's interface before relying on it — client libraries change.
     client.set_api_creds(client.create_or_derive_api_creds())
+    client._resolved_address = derived_address  # stashed for get_wallet_address() below
     return client
+
+
+def get_wallet_address() -> str:
+    """Returns the wallet address POLYMARKET_PRIVATE_KEY actually resolves
+    to, or 'unknown' if it couldn't be derived. Used to surface this in
+    Telegram messages so it's directly visible without checking server
+    logs — see the comment in _get_client() above for why this matters."""
+    private_key = os.environ.get("POLYMARKET_PRIVATE_KEY")
+    if not private_key:
+        return "unknown (POLYMARKET_PRIVATE_KEY not set)"
+    try:
+        from eth_account import Account
+        return Account.from_key(private_key).address
+    except Exception:
+        return "unknown (couldn't derive from POLYMARKET_PRIVATE_KEY)"
 
 
 def get_wallet_balance_usd() -> float:
