@@ -24,10 +24,10 @@ opportunity this won't catch — it deliberately only measures "who got in
 fast," not ongoing activity (that's what the regular category consensus
 signals are for).
 
-⚠️ DIAGNOSTIC MODE (as of this version): MIN_EARLY_MOVERS is still 1 (not
-the intended 2) for one more round, specifically to confirm the
-creationDate fix actually produces real overlap now, before reverting to
-the intended threshold of 2.
+MIN_EARLY_MOVERS was temporarily held at 1 (instead of the intended 2)
+while confirming the creationDate-based "new market" fix actually
+produced real overlap — confirmed, and reverted to 2 on 2026-09-08 per
+Levi's request.
 
 WALLET QUALITY GATE (added 2026-09-08, Levi's request): a wallet's
 position only counts toward an early-mover signal at all if that wallet
@@ -52,7 +52,7 @@ import wallet_tracker
 
 log = logging.getLogger("early_movers")
 
-MIN_EARLY_MOVERS = 1  # TEMPORARY DIAGNOSTIC — was 2. See note above.
+MIN_EARLY_MOVERS = 2  # restored to the intended value 2026-09-08. See note above.
 NEWEST_EVENTS_TO_CHECK = 100  # how many of Polymarket's newest events to look at each cycle
 NEW_MARKET_MAX_AGE_MINUTES = 60  # raised from 10 to 60 at Levi's request (2026-09-08) —
                                   # widens the "brand-new market" window to a full hour

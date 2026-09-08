@@ -197,21 +197,26 @@ def run_regular_consensus(data):
             log.info("(already alerted — skipping duplicate ping)")
 
         # TRADE ELIGIBILITY: split by mode, per Levi's request (2026-09-08).
-        # LIVE trades: no momentum gate — every signal that clears the
+        # LIVE trades: no gate here — every signal that clears the
         # category consensus threshold above gets an Approve/Reject
-        # prompt regardless of momentum; his own tap is the filter here,
-        # matching early movers and elite movers.
-        # PAPER trades: DO gate on momentum — only logged as a paper
-        # trade (for accuracy tracking) if momentum is 'steady' or
-        # 'growing'. The Telegram alert message itself always shows
-        # momentum either way (see momentum_str above) — this only
+        # prompt regardless of momentum or ROI; his own tap is the filter
+        # here, matching early movers and elite movers.
+        # PAPER trades: DO gate — only logged as a paper trade (for
+        # accuracy tracking) if momentum is 'steady' or 'growing' AND the
+        # agreeing wallets' average realized ROI is positive. The
+        # Telegram alert message itself always shows momentum/ROI either
+        # way (see momentum_str/average_roi_str above) — this only
         # controls whether a paper trade gets recorded.
         if PAPER_MODE:
-            if momentum["trend"] in ("steady", "growing"):
+            momentum_ok = momentum["trend"] in ("steady", "growing")
+            roi_ok, roi_reason = wallet_tracker.average_roi_is_positive(signal.agreeing_wallets)
+            if momentum_ok and roi_ok:
                 execute_trade(signal, signal_type="consensus")
-            else:
+            elif not momentum_ok:
                 log.info("  -> not paper-trading: momentum is '%s' (needs steady or growing)",
                           momentum["trend"])
+            else:
+                log.info("  -> not paper-trading: %s", roi_reason)
         else:
             request_live_trade(signal, signal_type="consensus")
 
