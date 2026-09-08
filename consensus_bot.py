@@ -31,7 +31,7 @@ log = logging.getLogger("consensus_bot")
 LEADERBOARD_PERIOD = "30d"    # "1d" | "7d" | "30d" | "all"
 POLL_INTERVAL_SECONDS = 300   # a full pass over CANDIDATE_POOL_SIZE wallets takes longer
                                # than the old 20-wallet version — leave headroom here
-PAPER_MODE = false
+PAPER_MODE = False
 
 # Only alert on these categories. Empty list = no filter (alert on everything).
 CATEGORY_FILTER: list[str] = []
