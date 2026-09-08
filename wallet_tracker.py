@@ -502,17 +502,26 @@ def average_roi_is_positive(wallets: list[str]) -> tuple[bool, str]:
 
 def rank_wallets_by_realized_roi(wallets: list[str]) -> list[str]:
     """Reorders a candidate pool by historical realized ROI% instead of
-    Polymarket's own profit-rank ordering. Any wallet with at least ONE
-    resolved position is ranked by ROI% descending; wallets with zero
-    resolved positions (nothing at all to go on yet) keep their original
-    relative order and are appended after. Since ROI% is available from a
-    single resolved bet, early rankings can swing a lot on small samples —
-    that's accepted, not a bug (see get_wallet_realized_roi)."""
+    Polymarket's own profit-rank ordering. A wallet is only ranked by
+    ROI% once it has at least MIN_SAMPLE_SIZE resolved positions — this
+    is what determines who can land in the elite-movers top 5 (and
+    overall rank generally); below that, a single lucky/unlucky bet could
+    otherwise swing someone from last to first. Wallets below the
+    threshold (including zero resolved positions) keep their original
+    relative order and are appended after everyone who qualifies —
+    unproven, not penalized, just not yet eligible to outrank a wallet
+    with an established track record.
+
+    Raised from a 1-resolved-bet minimum to MIN_SAMPLE_SIZE at Levi's
+    request (2026-09-08), specifically to reduce noise in the elite
+    movers signal — see get_wallet_realized_roi() for why the ROI NUMBER
+    itself (as opposed to ranking eligibility) still shows at any sample
+    size elsewhere, e.g. in alert messages via format_wallet_roi()."""
     confident = []
     unproven = []
     for w in wallets:
         roi = get_wallet_realized_roi(w)
-        if roi["roi_pct"] is not None:
+        if roi["roi_pct"] is not None and roi["resolved_count"] >= MIN_SAMPLE_SIZE:
             confident.append((w, roi["roi_pct"]))
         else:
             unproven.append(w)
