@@ -1,16 +1,47 @@
 """
-execution.py — places real orders on Polymarket via py-clob-client.
+execution.py — places real orders on Polymarket via py-clob-client-v2.
 
 ⚠️ UNVERIFIED AGAINST A LIVE WALLET. Everything else in this project has
 been tested against real Polymarket data. This file has not — there is no
 funded wallet to test it with, and this environment has no network access
 to Polymarket's order-placement endpoints at all. Treat this as a first
-draft written against py-clob-client's documented interface, not as
-proven-working code. Test with the smallest possible real amount before
-trusting it with anything larger.
+draft written against py-clob-client-v2's actual installed source (read
+directly, not guessed from docs — see below), not as proven-working code.
+Test with the smallest possible real amount before trusting it with
+anything larger.
+
+LIBRARY VERSION (fixed 2026-09-08 — this was the actual root cause of the
+"$0.00 balance" that survived every previous fix): Polymarket did a full
+exchange upgrade on 2026-04-28 (new CTF Exchange V2, and a new native
+collateral token, pUSD, replacing USDC.e). Their own migration notes say
+plainly: "v1 client libraries won't work with the new contracts." This
+project was still on the old `py-clob-client` package. It wasn't throwing
+errors — it was reaching a real endpoint and getting a real, well-formed
+200 OK response — it was just asking about the OLD USDC.e collateral
+pool, which is genuinely empty now that everything is pUSD. That's why
+every wallet-address fix still read $0.00: the wallet was right, the
+signing was right, the balance was right — for a token that isn't used
+anymore. Confirmed by installing py-clob-client-v2 1.1.0 in a throwaway
+venv and reading its actual client.py/clob_types.py source rather than
+trusting scraped docs (which gave conflicting, some hallucinated-looking,
+answers). Relevant facts confirmed directly from that source:
+  - ClobClient's constructor signature is UNCHANGED: still
+    ClobClient(host, chain_id, key=..., creds=..., signature_type=...,
+    funder=...). No changes needed there.
+  - client.create_or_derive_api_creds() was RENAMED to
+    client.create_or_derive_api_key() — v2 has no create_or_derive_api_creds
+    at all, so the old call would fail once the right package is installed.
+  - AssetType.COLLATERAL still means "whatever the current collateral
+    token is" (now pUSD) — no separate pUSD-specific enum value needed.
+  - MarketOrderArgs is still a valid import (an alias for the new
+    MarketOrderArgsV2), and order_builder.constants.BUY is unchanged.
+  - client.create_and_post_market_order(order_args) is the recommended
+    single call for a market order now (builds + posts + retries once on
+    a version mismatch) — used below instead of manual
+    create_market_order() + post_order().
 
 Setup required before this can do anything:
-  1. pip install py-clob-client
+  1. pip install py-clob-client-v2   (NOT py-clob-client — see above)
   2. A Polygon wallet, funded with USDC (or pUSD), private key available
   3. Set this environment variable (NEVER commit it, NEVER hardcode it —
      set it in Render's dashboard as a secret env var):
@@ -145,14 +176,15 @@ def _resolve_account_config():
 
 
 def _get_client():
-    """Build an authenticated CLOB client. Imports py-clob-client lazily so
-    the rest of the bot works fine even if that package isn't installed —
-    it's only needed once PAPER_MODE is actually turned off."""
+    """Build an authenticated CLOB client. Imports py-clob-client-v2 lazily
+    so the rest of the bot works fine even if that package isn't installed
+    — it's only needed once PAPER_MODE is actually turned off."""
     try:
-        from py_clob_client.client import ClobClient
+        from py_clob_client_v2.client import ClobClient
     except ImportError:
         raise RuntimeError(
-            "py-clob-client isn't installed. Run: pip install py-clob-client"
+            "py-clob-client-v2 isn't installed. Run: pip install py-clob-client-v2 "
+            "(NOT py-clob-client — see the module docstring for why)."
         )
 
     private_key, signer_address, trading_address, signature_type = _resolve_account_config()
@@ -172,10 +204,11 @@ def _get_client():
             chain_id=POLYGON_CHAIN_ID,
             signature_type=0,
         )
-    # py-clob-client requires deriving/setting API credentials once per key.
-    # NOTE: verify this call still matches the current py-clob-client
-    # version's interface before relying on it — client libraries change.
-    client.set_api_creds(client.create_or_derive_api_creds())
+    # py-clob-client-v2 requires deriving/setting API credentials once per
+    # key. Method name confirmed directly from the installed v2 source:
+    # create_or_derive_api_key() — the old create_or_derive_api_creds() no
+    # longer exists in this package.
+    client.set_api_creds(client.create_or_derive_api_key())
     client._signer_address = signer_address    # stashed for get_wallet_status() below
     client._trading_address = trading_address
     return client
@@ -214,15 +247,13 @@ def get_wallet_address() -> str:
 
 
 def get_wallet_balance_usd() -> float:
-    """Current USDC collateral balance available to trade with.
+    """Current collateral (pUSD) balance available to trade with.
 
-    NOTE: unverified — py-clob-client's balance-check method/response shape
-    should be confirmed against current docs before trusting this number.
     Wrapped in _with_timeout — see that function's docstring for why.
     """
     def _do():
         client = _get_client()
-        from py_clob_client.clob_types import BalanceAllowanceParams, AssetType
+        from py_clob_client_v2.clob_types import BalanceAllowanceParams, AssetType
 
         params = BalanceAllowanceParams(asset_type=AssetType.COLLATERAL)
         resp = client.get_balance_allowance(params)
@@ -248,25 +279,24 @@ def place_market_buy(token_id: str, size_usd: float) -> dict:
     """Place a market buy order for approximately size_usd worth of the
     given outcome token.
 
-    NOTE: unverified — order construction (OrderArgs field names, market
-    vs. limit order helper method names) should be confirmed against the
-    current py-clob-client docs/examples before relying on this in
-    production. This is written against the commonly-documented pattern
-    but client libraries change their exact interfaces over time.
+    Uses create_and_post_market_order() — confirmed directly from the
+    installed py-clob-client-v2 source to be the single recommended call
+    for this (it builds the order, posts it as FOK by default, and retries
+    once automatically if the exchange reports a version mismatch), rather
+    than the old manual create_market_order() + post_order() two-step.
     Wrapped in _with_timeout — see that function's docstring for why.
     """
     def _do():
         client = _get_client()
-        from py_clob_client.clob_types import MarketOrderArgs
-        from py_clob_client.order_builder.constants import BUY
+        from py_clob_client_v2.clob_types import MarketOrderArgs
+        from py_clob_client_v2.order_builder.constants import BUY
 
         order_args = MarketOrderArgs(
             token_id=token_id,
             amount=size_usd,
             side=BUY,
         )
-        signed_order = client.create_market_order(order_args)
-        resp = client.post_order(signed_order)
+        resp = client.create_and_post_market_order(order_args)
         log.info("Order submitted: token=%s size=$%.2f response=%s", token_id, size_usd, resp)
         return resp
 
