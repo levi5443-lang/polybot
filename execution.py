@@ -226,6 +226,15 @@ def get_wallet_balance_usd() -> float:
 
         params = BalanceAllowanceParams(asset_type=AssetType.COLLATERAL)
         resp = client.get_balance_allowance(params)
+        # Log the RAW response every time, before any conversion — added
+        # 2026-09-08 because a $0.00 result was previously indistinguishable
+        # from "Polymarket genuinely says zero" vs. "the response didn't
+        # have the shape we expected and we silently defaulted to 0" (the
+        # old code's getattr(resp, "balance", 0) fallback could mask a real
+        # problem behind a fake-looking zero). This makes the actual
+        # Polymarket response visible in the logs every single time.
+        log.info("Raw balance-allowance response for trading_address=%s: %r",
+                  getattr(client, "_trading_address", "unknown"), resp)
         # Response is typically in the smallest USDC unit (6 decimals) —
         # verify this against a real response before trusting the /1e6
         # conversion.
