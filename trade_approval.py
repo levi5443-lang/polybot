@@ -304,6 +304,14 @@ def process_pending_approvals() -> None:
 
         data = callback.get("data", "")
         callback_id = callback.get("id")
+        # Log every button tap the instant it's seen, before any other check
+        # — this is the one line that proves Telegram actually delivered the
+        # tap to the bot at all, regardless of what happens to it next.
+        # Added 2026-09-08 (Levi's request) because taps that hit an old/
+        # stale message were being silently dropped with nothing in the
+        # logs to show they'd even arrived.
+        log.info("Callback received: data=%r from user_id=%s", data,
+                  callback.get("from", {}).get("id"))
         if ":" not in data:
             answer_callback_query(callback_id)
             continue
@@ -311,7 +319,9 @@ def process_pending_approvals() -> None:
         action, short_id = data.split(":", 1)
         record = pending.get(short_id)
         if not record:
-            # Already handled in a previous cycle, or expired, or unknown.
+            log.info("Callback [%s] ignored: no pending request with that ID "
+                      "(expired, already handled, or an old message) — "
+                      "currently pending: %s", short_id, list(pending.keys()))
             answer_callback_query(callback_id, text="This request is no longer active.")
             continue
 
