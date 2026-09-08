@@ -127,6 +127,25 @@ def _get_client():
         log.warning("Could not derive an address from POLYMARKET_PRIVATE_KEY "
                     "to sanity-check it (this may indicate a malformed key): %s", e)
 
+    # If Levi has also set POLYMARKET_WALLET_ADDRESS (his known-funded
+    # wallet), cross-check it against what the key actually resolves to —
+    # purely a read of the environment, never a write to it. Loud on
+    # mismatch so this is impossible to miss in the logs. (2026-09-08)
+    expected_address = os.environ.get("POLYMARKET_WALLET_ADDRESS")
+    if expected_address and derived_address:
+        if expected_address.strip().lower() != derived_address.strip().lower():
+            log.error(
+                "WALLET MISMATCH: POLYMARKET_PRIVATE_KEY resolves to %s but "
+                "POLYMARKET_WALLET_ADDRESS says the funded wallet is %s. "
+                "This key does NOT control the funded wallet — trades will "
+                "keep reading a $0.00 balance until the key in Render "
+                "actually matches this address.",
+                derived_address, expected_address,
+            )
+        else:
+            log.info("Wallet check OK: POLYMARKET_PRIVATE_KEY matches "
+                      "POLYMARKET_WALLET_ADDRESS (%s).", expected_address)
+
     # signature_type=0: plain EOA — trades directly as the wallet behind
     # POLYMARKET_PRIVATE_KEY, no proxy contract, no funder address. See the
     # module docstring above for why this changed from signature_type=2.
@@ -157,6 +176,40 @@ def get_wallet_address() -> str:
         return Account.from_key(private_key).address
     except Exception:
         return "unknown (couldn't derive from POLYMARKET_PRIVATE_KEY)"
+
+
+def get_wallet_status() -> dict:
+    """Read-only sanity check — never writes anything, never touches Render.
+
+    Added 2026-09-08 after several rounds of Levi manually pasting a new
+    POLYMARKET_PRIVATE_KEY into Render and it still not matching his funded
+    wallet (0xf0D6...198 kept showing up instead of the expected
+    0xeF566a...D07). Rather than me updating Render's env vars — Levi has
+    asked that I not touch them — this lets the *env itself* declare what
+    it's supposed to be: if he also sets an optional POLYMARKET_WALLET_ADDRESS
+    env var to his real funded wallet address, the bot compares it against
+    what the private key actually resolves to on every balance/trade check,
+    and says plainly whether they match. If POLYMARKET_WALLET_ADDRESS isn't
+    set, this just reports the resolved address with no comparison — still
+    useful, just not self-checking.
+
+    Returns:
+        {"resolved": <address the private key resolves to, or an
+                      "unknown (...)" message>,
+         "expected": <POLYMARKET_WALLET_ADDRESS value, or None if unset>,
+         "mismatch": True  -> both are set and they don't match
+                     False -> both are set and they match
+                     None  -> nothing to compare (expected unset, or
+                              resolved couldn't be derived)}
+    """
+    resolved = get_wallet_address()
+    expected = os.environ.get("POLYMARKET_WALLET_ADDRESS")
+    if not expected:
+        return {"resolved": resolved, "expected": None, "mismatch": None}
+    if not resolved or resolved.startswith("unknown"):
+        return {"resolved": resolved, "expected": expected, "mismatch": None}
+    mismatch = resolved.strip().lower() != expected.strip().lower()
+    return {"resolved": resolved, "expected": expected, "mismatch": mismatch}
 
 
 def get_wallet_balance_usd() -> float:

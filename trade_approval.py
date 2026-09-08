@@ -213,12 +213,23 @@ def _execute_approved_trade(pending_record: dict) -> str:
     if size_usd < 1.0:
         # Includes which wallet address the bot is actually checking —
         # added 2026-09-08 so a wrong/mismatched POLYMARKET_PRIVATE_KEY is
-        # visible right here in Telegram (compare against your real
-        # funded wallet's address) instead of needing server logs pulled
-        # every time this comes up.
-        wallet_address = execution.get_wallet_address()
-        return (f"Blocked by the 26% total exposure cap (balance ${balance:,.2f} "
-                f"on wallet {wallet_address}) — no action taken.")
+        # visible right here in Telegram instead of needing server logs
+        # pulled every time this comes up. If POLYMARKET_WALLET_ADDRESS is
+        # also set (Levi's known-funded wallet), this now says explicitly
+        # whether the key actually matches it — read-only, never touches
+        # Render's env.
+        status = execution.get_wallet_status()
+        base = (f"Blocked by the 26% total exposure cap (balance ${balance:,.2f} "
+                f"on wallet {status['resolved']}) — no action taken.")
+        if status["mismatch"] is True:
+            base += (f"\n\n⚠️ This does NOT match the funded wallet you told the bot "
+                      f"to expect ({status['expected']}). The key in Render still "
+                      f"isn't the right one — it controls a different, unfunded "
+                      f"wallet. Balance will stay $0.00 until the key actually "
+                      f"matches that address.")
+        elif status["mismatch"] is False:
+            base += "\n\n✅ This matches your funded wallet — the key is correct."
+        return base
 
     try:
         resp = execution.place_market_buy(token_id, size_usd)
