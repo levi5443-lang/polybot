@@ -138,10 +138,20 @@ def get_roi(mode: str = "paper") -> dict:
     total_invested = sum(t["size_usd"] for t in closed)
     total_pnl = sum(t["realized_pnl"] for t in closed)
     roi_pct = round(100 * total_pnl / total_invested, 1) if total_invested > 0 else None
+
+    # The literal SUM of each trade's own individual ROI% — different from
+    # roi_pct above, which is dollar-weighted (total profit / total
+    # invested). This one just adds up "trade 1 was +33%, trade 2 was
+    # +27%, trade 3 was +22%" -> +82%, with no averaging/weighting at all.
+    sum_roi_pct = round(
+        sum(100 * t["realized_pnl"] / t["size_usd"] for t in closed if t.get("size_usd", 0) > 0), 1
+    ) if closed else None
+
     return {
         "total_invested": round(total_invested, 2),
         "total_pnl": round(total_pnl, 2),
         "roi_pct": roi_pct,
+        "sum_roi_pct": sum_roi_pct,
         "resolved_count": len(closed),
     }
 
@@ -248,8 +258,9 @@ def format_accuracy_command_message() -> str:
     lines = ["📊 *Accuracy*\n"]
     if paper["total_closed"] > 0:
         roi_note = f", ROI {paper_roi['roi_pct']:+.1f}%" if paper_roi["roi_pct"] is not None else ""
+        total_note = f" (sum: {paper_roi['sum_roi_pct']:+.1f}%)" if paper_roi["sum_roi_pct"] is not None else ""
         lines.append(f"Paper: {paper['wins']}/{paper['total_closed']} correct "
-                      f"({paper['win_rate_pct']}%){roi_note}")
+                      f"({paper['win_rate_pct']}%){roi_note}{total_note}")
         breakdown = format_category_breakdown(mode="paper")
         if breakdown:
             lines.append(breakdown)
