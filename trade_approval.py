@@ -67,6 +67,7 @@ HELP_TEXT = (
     "/history — most recent resolved trades\n"
     "/accuracy — overall win rate + ROI + open trade count\n"
     "/resetpaper — wipe paper trade history (asks to confirm first)\n"
+    "/wallet — check which wallet the bot is trading from + live balance\n"
     "/help — this message"
 )
 
@@ -285,11 +286,47 @@ def _handle_text_command(text: str) -> None:
                   "(open and resolved) — accuracy, ROI, everything. Live trades "
                   "are never affected.\n\nSend /resetpaper confirm to proceed, "
                   "or ignore this to cancel.")
+    elif text.startswith("/wallet") or text.startswith("/balance"):
+        reply = _handle_wallet_command()
     elif text.startswith("/help") or text.startswith("/start"):
         reply = HELP_TEXT
     else:
         reply = f"Unknown command.\n\n{HELP_TEXT}"
     send_telegram_alert(reply)
+
+
+def _handle_wallet_command() -> str:
+    """/wallet (or /balance) — on-demand wallet check, added 2026-09-08 so
+    Levi can verify which wallet the bot is actually trading from and its
+    live balance at any time, instead of waiting for a signal to fire and
+    get blocked. Read-only — never touches Render's environment, only
+    reads POLYMARKET_PRIVATE_KEY / POLYMARKET_WALLET_ADDRESS and asks
+    Polymarket for the current balance."""
+    if os.environ.get("PAPER_MODE", "").lower() in ("true", "1", "yes"):
+        return "⚠️ PAPER_MODE is on — no real wallet is in use."
+
+    import execution
+
+    status = execution.get_wallet_status()
+    lines = [f"Wallet in use: {status['resolved']}"]
+
+    if status["expected"] is None:
+        lines.append(
+            "(Set POLYMARKET_WALLET_ADDRESS in Render to your funded wallet "
+            "and this will tell you automatically whether the key matches it.)"
+        )
+    elif status["mismatch"] is True:
+        lines.append(f"⚠️ Does NOT match your expected wallet ({status['expected']}).")
+    elif status["mismatch"] is False:
+        lines.append("✅ Matches your expected wallet.")
+
+    try:
+        balance = execution.get_wallet_balance_usd()
+        lines.append(f"Balance: ${balance:,.2f}")
+    except Exception as e:
+        lines.append(f"Could not fetch balance right now: {e}")
+
+    return "\n".join(lines)
 
 
 def process_pending_approvals() -> None:
