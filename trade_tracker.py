@@ -93,9 +93,10 @@ def sync_resolved_trades() -> int:
     return resolved_count
 
 
-def get_accuracy(mode: str = None, category: str = None) -> dict:
+def get_accuracy(mode: str = None, category: str = None, signal_type: str = None) -> dict:
     """Win rate across closed trades, optionally filtered by mode
-    ('paper'/'live') and/or category. Returns a dict with counts and
+    ('paper'/'live'), category, and/or signal_type ('consensus',
+    'early_mover', 'elite_mover'). Returns a dict with counts and
     win_rate_pct (None if there's nothing closed yet to compute from)."""
     trades = _load_trade_log()
     closed = [t for t in trades if t["status"] == "closed" and "correct" in t]
@@ -104,6 +105,8 @@ def get_accuracy(mode: str = None, category: str = None) -> dict:
         closed = [t for t in closed if t.get("mode") == mode]
     if category:
         closed = [t for t in closed if t.get("category") == category]
+    if signal_type:
+        closed = [t for t in closed if t.get("signal_type") == signal_type]
 
     wins = sum(1 for t in closed if t["correct"])
     losses = len(closed) - wins
@@ -118,7 +121,7 @@ def get_accuracy(mode: str = None, category: str = None) -> dict:
     }
 
 
-def get_roi(mode: str = "paper") -> dict:
+def get_roi(mode: str = "paper", signal_type: str = None) -> dict:
     """Dollar-weighted ROI% across all of OUR OWN closed trades in a given
     mode — same approach as wallet_tracker's per-wallet ROI, applied to
     the bot's own track record. For paper trades this reflects "if every
@@ -128,13 +131,16 @@ def get_roi(mode: str = "paper") -> dict:
     (realized_pnl of exactly +1/-1 with no matching size_usd basis) are
     still included using whatever pnl was recorded, so old data doesn't
     just vanish, but expect the number to be less meaningful for the
-    period before this fix shipped.
+    period before this fix shipped. Pass signal_type ('consensus',
+    'early_mover', 'elite_mover') to see ROI for just that signal type.
     """
     trades = _load_trade_log()
     closed = [
         t for t in trades if t["status"] == "closed" and t.get("mode") == mode
         and t.get("realized_pnl") is not None
     ]
+    if signal_type:
+        closed = [t for t in closed if t.get("signal_type") == signal_type]
     total_invested = sum(t["size_usd"] for t in closed)
     total_pnl = sum(t["realized_pnl"] for t in closed)
     roi_pct = round(100 * total_pnl / total_invested, 1) if total_invested > 0 else None
@@ -247,6 +253,51 @@ def format_category_breakdown(mode: str = "paper") -> str:
     return "\n".join(lines)
 
 
+# Human-readable labels for the three kinds of signal the bot can trade on
+# — matches the signal_type strings consensus_bot.py now passes through to
+# risk_manager.record_trade_open() (see run_regular_consensus/
+# run_early_movers/run_elite_movers). Trades logged before 2026-09-08 were
+# all stamped "consensus" regardless of which signal actually produced
+# them (a bug — execute_trade()/request_live_trade() ignored which
+# function called them) — those older rows can't be reclassified after
+# the fact, so a signal-type breakdown is only trustworthy for trades
+# opened after that fix shipped.
+SIGNAL_TYPE_LABELS = {
+    "consensus": "Consensus",
+    "early_mover": "Early Mover",
+    "elite_mover": "Elite Mover",
+}
+
+
+def get_signal_types_with_closed_trades(mode: str = "paper") -> list:
+    """Every distinct signal_type that has at least one resolved trade,
+    in a given mode — same pattern as get_categories_with_closed_trades,
+    applied to signal type instead of category."""
+    trades = _load_trade_log()
+    return sorted({
+        t.get("signal_type", "consensus") for t in trades
+        if t["status"] == "closed" and t.get("mode") == mode and "correct" in t
+    })
+
+
+def format_signal_type_breakdown(mode: str = "paper") -> str:
+    """e.g. '  Consensus: 5/6 (83.3%)\\n  Early Mover: 1/3 (33.3%)' — this
+    is what actually answers "which signal type produces winners,"
+    something the aggregate accuracy number alone can't show."""
+    signal_types = get_signal_types_with_closed_trades(mode=mode)
+    if not signal_types:
+        return ""
+    lines = []
+    for st in signal_types:
+        acc = get_accuracy(mode=mode, signal_type=st)
+        roi = get_roi(mode=mode, signal_type=st)
+        if acc["total_closed"] > 0:
+            roi_note = f", ROI {roi['roi_pct']:+.1f}%" if roi["roi_pct"] is not None else ""
+            label = SIGNAL_TYPE_LABELS.get(st, st)
+            lines.append(f"  {label}: {acc['wins']}/{acc['total_closed']} ({acc['win_rate_pct']}%){roi_note}")
+    return "\n".join(lines)
+
+
 def format_accuracy_command_message() -> str:
     """Response for the /accuracy Telegram command — same numbers as the
     daily digest's running totals, available on demand."""
@@ -263,7 +314,12 @@ def format_accuracy_command_message() -> str:
                       f"({paper['win_rate_pct']}%){roi_note}{total_note}")
         breakdown = format_category_breakdown(mode="paper")
         if breakdown:
+            lines.append("By category:")
             lines.append(breakdown)
+        signal_breakdown = format_signal_type_breakdown(mode="paper")
+        if signal_breakdown:
+            lines.append("By signal type:")
+            lines.append(signal_breakdown)
     else:
         lines.append("Paper: no resolved trades yet")
     if live["total_closed"] > 0:
@@ -272,7 +328,12 @@ def format_accuracy_command_message() -> str:
                       f"({live['win_rate_pct']}%){roi_note}")
         breakdown = format_category_breakdown(mode="live")
         if breakdown:
+            lines.append("By category:")
             lines.append(breakdown)
+        signal_breakdown = format_signal_type_breakdown(mode="live")
+        if signal_breakdown:
+            lines.append("By signal type:")
+            lines.append(signal_breakdown)
     else:
         lines.append("Live: no resolved trades yet")
     trades = _load_trade_log()

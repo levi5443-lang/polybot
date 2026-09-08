@@ -40,11 +40,17 @@ _alerted_keys: set[tuple] = set()
 _alerted_early_mover_keys: set[tuple] = set()
 
 
-def execute_trade(signal):
+def execute_trade(signal, signal_type="consensus"):
     """PAPER MODE ONLY. Live signals never call this — see
     request_live_trade() below, which routes them through
     trade_approval.py's Telegram approve/reject flow instead, since real
-    money should never move without your explicit tap."""
+    money should never move without your explicit tap.
+
+    signal_type identifies WHICH kind of signal produced this trade
+    ('consensus', 'early_mover', 'elite_mover') — passed through to the
+    ledger so accuracy can later be broken down by signal type, not just
+    by category. Every caller below should pass its own signal_type
+    explicitly rather than relying on this default."""
     import risk_manager
 
     if risk_manager.has_ever_traded(signal.market_id, signal.outcome, mode="paper"):
@@ -59,14 +65,18 @@ def execute_trade(signal):
     risk_manager.record_trade_open(
         signal.market_id, signal.market_question, signal.outcome,
         size_usd=1.0, entry_price=signal.cur_price, category=signal.category,
-        mode="paper", signal_type="consensus", end_date=signal.end_date
+        mode="paper", signal_type=signal_type, end_date=signal.end_date
     )
 
 
-def request_live_trade(signal):
+def request_live_trade(signal, signal_type="consensus"):
     """LIVE MODE ONLY. Asks for approval via Telegram instead of trading
     immediately — see trade_approval.py for the actual approve/reject
-    handling, which happens on a later cycle once you respond."""
+    handling, which happens on a later cycle once you respond.
+
+    signal_type is carried through to the pending-approval record so
+    that, if approved, the trade gets logged with the right signal_type
+    (see trade_approval.py) — same purpose as in execute_trade() above."""
     import risk_manager
     import trade_approval
 
@@ -85,7 +95,7 @@ def request_live_trade(signal):
                   signal.market_question, signal.outcome)
         return
 
-    trade_approval.request_trade_approval(signal)
+    trade_approval.request_trade_approval(signal, signal_type=signal_type)
 
 
 def run_once():
@@ -194,9 +204,9 @@ def run_regular_consensus(data):
         # Approve/Reject treatment regardless of momentum; his own tap is
         # the filter, matching early movers and elite movers.
         if PAPER_MODE:
-            execute_trade(signal)
+            execute_trade(signal, signal_type="consensus")
         else:
-            request_live_trade(signal)
+            request_live_trade(signal, signal_type="consensus")
 
 
 def run_early_movers(data):
@@ -242,9 +252,9 @@ def run_early_movers(data):
             _alerted_early_mover_keys.add(key)
 
             if PAPER_MODE:
-                execute_trade(signal)
+                execute_trade(signal, signal_type="early_mover")
             else:
-                request_live_trade(signal)
+                request_live_trade(signal, signal_type="early_mover")
         else:
             log.info("(already alerted — skipping duplicate ping)")
 
@@ -306,9 +316,9 @@ def run_elite_movers(data):
         # elite moves now get the same Approve/Reject treatment as
         # consensus and early-mover signals: his own tap is the filter.
         if PAPER_MODE:
-            execute_trade(signal)
+            execute_trade(signal, signal_type="elite_mover")
         else:
-            request_live_trade(signal)
+            request_live_trade(signal, signal_type="elite_mover")
 
 
 def run_forever():

@@ -111,8 +111,14 @@ def _format_resolution_date(end_date: str) -> str:
         return end_date  # show the raw value rather than hiding it entirely
 
 
-def request_trade_approval(signal) -> None:
-    """Send an Approve/Reject prompt for a live signal and remember it."""
+def request_trade_approval(signal, signal_type: str = "consensus") -> None:
+    """Send an Approve/Reject prompt for a live signal and remember it.
+
+    signal_type ('consensus', 'early_mover', 'elite_mover') is carried in
+    the pending record so that, if you approve, _execute_approved_trade()
+    below can log the trade with the signal type that actually produced
+    it — otherwise every live trade would get stamped 'consensus' by
+    default regardless of where it came from."""
     short_id = uuid.uuid4().hex[:8]
     pending = _load_pending()
     pending[short_id] = {
@@ -122,6 +128,7 @@ def request_trade_approval(signal) -> None:
         "category": signal.category,
         "token_id": signal.token_id,
         "end_date": signal.end_date,
+        "signal_type": signal_type,
         "requested_at": datetime.now(timezone.utc).isoformat(),
     }
     _save_pending(pending)
@@ -211,6 +218,7 @@ def _execute_approved_trade(pending_record: dict) -> str:
     risk_manager.record_trade_open(
         market_id, pending_record["market_question"], outcome,
         size_usd, entry_price, pending_record["category"], mode="live",
+        signal_type=pending_record.get("signal_type", "consensus"),
         end_date=pending_record.get("end_date", "")
     )
     return f"✅ Executed: ${size_usd:,.2f} on '{outcome}' (balance was ${balance:,.2f})."
