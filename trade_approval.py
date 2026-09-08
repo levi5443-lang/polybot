@@ -348,8 +348,28 @@ def process_pending_approvals() -> None:
         if message is not None:
             chat_id = str(message.get("chat", {}).get("id", ""))
             text = (message.get("text") or "").strip()
+            # Log every text message the instant it's seen, before the
+            # authorization check — added 2026-09-08 because, unlike
+            # button taps (which already log "Callback received"
+            # unconditionally), a text command that didn't match
+            # authorized_chat_id — or that raised an exception inside
+            # _handle_text_command — vanished with ZERO trace anywhere.
+            # This makes that failure mode visible instead of silent.
+            if text:
+                log.info("Message received: text=%r from chat_id=%s (authorized=%s)",
+                          text, chat_id, authorized_chat_id)
             if text and authorized_chat_id and chat_id == str(authorized_chat_id):
-                _handle_text_command(text)
+                try:
+                    _handle_text_command(text)
+                except Exception as e:
+                    log.error("Text command %r raised an exception: %s", text, e, exc_info=True)
+                    send_telegram_alert(f"⚠️ Internal error handling that command: {e}")
+            elif text and not authorized_chat_id:
+                log.warning("TELEGRAM_CHAT_ID is not set in the environment — "
+                            "no chat is authorized, so this command was ignored.")
+            elif text:
+                log.warning("Message from chat_id=%s ignored — does not match "
+                            "authorized TELEGRAM_CHAT_ID=%s.", chat_id, authorized_chat_id)
             continue
 
         callback = update.get("callback_query")
