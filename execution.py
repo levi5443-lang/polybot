@@ -41,12 +41,55 @@ docs/examples before trusting this with real size.
 """
 
 import os
+import signal
 import logging
 
 log = logging.getLogger("execution")
 
 CLOB_HOST = "https://clob.polymarket.com"
 POLYGON_CHAIN_ID = 137
+NETWORK_TIMEOUT_SECONDS = 20  # see _with_timeout below
+
+
+class ExecutionTimeout(Exception):
+    """Raised when a Polymarket network call takes too long. Caught by
+    trade_approval.py's try/except around _execute_approved_trade() the
+    same way any other execution error is — surfaces as a Telegram
+    message instead of hanging."""
+
+
+def _with_timeout(fn, *args, **kwargs):
+    """Runs fn(*args, **kwargs) but forcibly gives up after
+    NETWORK_TIMEOUT_SECONDS instead of hanging forever.
+
+    Added 2026-09-08 (Levi's request) after this entire single-threaded
+    bot froze completely — no more Telegram polling, no more market
+    scans, nothing — the moment a live trade was approved. The prime
+    suspect: py-clob-client's internal HTTP calls (deriving API creds,
+    checking balance, placing an order) have no guaranteed timeout of
+    their own, and because this whole process is one single thread, ANY
+    call that hangs freezes literally everything else the bot does,
+    including the fast Telegram-approval loop — which is exactly the
+    "nothing happens after I approve" symptom, just one level deeper
+    than the earlier bugs already fixed today.
+
+    Uses SIGALRM (signal-based, main-thread-only, Unix — fine for a
+    Render worker) rather than a background thread, since py-clob-client
+    calls aren't necessarily safe to abandon mid-flight from another
+    thread while still holding network sockets open.
+    """
+    def _on_timeout(signum, frame):
+        raise ExecutionTimeout(
+            f"Polymarket call took longer than {NETWORK_TIMEOUT_SECONDS}s and was aborted."
+        )
+
+    previous_handler = signal.signal(signal.SIGALRM, _on_timeout)
+    signal.alarm(NETWORK_TIMEOUT_SECONDS)
+    try:
+        return fn(*args, **kwargs)
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, previous_handler)
 
 
 def _get_client():
@@ -88,16 +131,21 @@ def get_wallet_balance_usd() -> float:
 
     NOTE: unverified — py-clob-client's balance-check method/response shape
     should be confirmed against current docs before trusting this number.
+    Wrapped in _with_timeout — see that function's docstring for why.
     """
-    client = _get_client()
-    from py_clob_client.clob_types import BalanceAllowanceParams, AssetType
+    def _do():
+        client = _get_client()
+        from py_clob_client.clob_types import BalanceAllowanceParams, AssetType
 
-    params = BalanceAllowanceParams(asset_type=AssetType.COLLATERAL)
-    resp = client.get_balance_allowance(params)
-    # Response is typically in the smallest USDC unit (6 decimals) — verify
-    # this against a real response before trusting the /1e6 conversion.
-    raw_balance = resp.get("balance") if isinstance(resp, dict) else getattr(resp, "balance", 0)
-    return float(raw_balance) / 1_000_000
+        params = BalanceAllowanceParams(asset_type=AssetType.COLLATERAL)
+        resp = client.get_balance_allowance(params)
+        # Response is typically in the smallest USDC unit (6 decimals) —
+        # verify this against a real response before trusting the /1e6
+        # conversion.
+        raw_balance = resp.get("balance") if isinstance(resp, dict) else getattr(resp, "balance", 0)
+        return float(raw_balance) / 1_000_000
+
+    return _with_timeout(_do)
 
 
 def place_market_buy(token_id: str, size_usd: float) -> dict:
@@ -109,17 +157,21 @@ def place_market_buy(token_id: str, size_usd: float) -> dict:
     current py-clob-client docs/examples before relying on this in
     production. This is written against the commonly-documented pattern
     but client libraries change their exact interfaces over time.
+    Wrapped in _with_timeout — see that function's docstring for why.
     """
-    client = _get_client()
-    from py_clob_client.clob_types import MarketOrderArgs
-    from py_clob_client.order_builder.constants import BUY
+    def _do():
+        client = _get_client()
+        from py_clob_client.clob_types import MarketOrderArgs
+        from py_clob_client.order_builder.constants import BUY
 
-    order_args = MarketOrderArgs(
-        token_id=token_id,
-        amount=size_usd,
-        side=BUY,
-    )
-    signed_order = client.create_market_order(order_args)
-    resp = client.post_order(signed_order)
-    log.info("Order submitted: token=%s size=$%.2f response=%s", token_id, size_usd, resp)
-    return resp
+        order_args = MarketOrderArgs(
+            token_id=token_id,
+            amount=size_usd,
+            side=BUY,
+        )
+        signed_order = client.create_market_order(order_args)
+        resp = client.post_order(signed_order)
+        log.info("Order submitted: token=%s size=$%.2f response=%s", token_id, size_usd, resp)
+        return resp
+
+    return _with_timeout(_do)
