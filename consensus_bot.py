@@ -31,6 +31,12 @@ log = logging.getLogger("consensus_bot")
 LEADERBOARD_PERIOD = "30d"    # "1d" | "7d" | "30d" | "all"
 POLL_INTERVAL_SECONDS = 300   # a full pass over CANDIDATE_POOL_SIZE wallets takes longer
                                # than the old 20-wallet version — leave headroom here
+APPROVAL_POLL_SECONDS = 15    # how often to check Telegram for a button tap/command,
+                               # independent of the much slower full market scan above —
+                               # see run_forever() for why this was split out
+                               # (2026-09-08, Levi's request: taps were taking up to
+                               # POLL_INTERVAL_SECONDS, in practice ~11-12 minutes, to
+                               # register because they were only checked once per full scan)
 PAPER_MODE = False
 
 # Only alert on these categories. Empty list = no filter (alert on everything).
@@ -351,14 +357,39 @@ def run_elite_movers(data):
 
 
 def run_forever():
+    """Main loop. Runs the full market scan (run_once — pulls leaderboards,
+    positions for every candidate wallet, checks for new signals) on its
+    own slow cadence (POLL_INTERVAL_SECONDS), but checks Telegram for a
+    button tap or text command on a MUCH faster, independent cadence
+    (APPROVAL_POLL_SECONDS).
+
+    This split exists because of a real problem (2026-09-08, Levi's
+    request): approvals used to only get checked once per full scan, and a
+    full scan was taking ~11-12 minutes end to end — so tapping Approve
+    could sit unnoticed for that long before you saw any reply. Now, in
+    between full scans, the loop just checks Telegram every
+    APPROVAL_POLL_SECONDS and goes back to sleep — worst case latency on a
+    tap drops to roughly APPROVAL_POLL_SECONDS (plus however long a full
+    scan that's already in progress has left to run, since this is one
+    single-threaded process and can't interrupt a scan partway through)."""
     import shared_storage
     shared_storage.migrate_legacy_local_data()
 
-    log.info("Starting consensus bot. PAPER_MODE=%s, category_threshold=%d, poll=%ds, period=%s",
-              PAPER_MODE, CATEGORY_CONSENSUS_THRESHOLD, POLL_INTERVAL_SECONDS, LEADERBOARD_PERIOD)
+    log.info("Starting consensus bot. PAPER_MODE=%s, category_threshold=%d, "
+              "full scan every %ds, approval checks every %ds, period=%s",
+              PAPER_MODE, CATEGORY_CONSENSUS_THRESHOLD, POLL_INTERVAL_SECONDS,
+              APPROVAL_POLL_SECONDS, LEADERBOARD_PERIOD)
+
+    last_full_scan = 0.0
     while True:
-        run_once()
-        time.sleep(POLL_INTERVAL_SECONDS)
+        now = time.time()
+        if now - last_full_scan >= POLL_INTERVAL_SECONDS:
+            run_once()  # already checks approvals itself, near the start
+            last_full_scan = time.time()
+        elif not PAPER_MODE:
+            import trade_approval
+            trade_approval.process_pending_approvals()
+        time.sleep(APPROVAL_POLL_SECONDS)
 
 
 if __name__ == "__main__":
