@@ -186,26 +186,13 @@ def run_regular_consensus(data):
         else:
             log.info("(already alerted — skipping duplicate ping)")
 
-        # TRADE ELIGIBILITY: only signals with CONFIRMED growing momentum
-        # get paper/live-traded — a signal we've never seen before ("new",
-        # no prior cycle to compare against) does NOT count as growing,
-        # same "prove it, don't assume it" standard applied everywhere
-        # else in this system. 'steady' is also tradeable, but only if
-        # EVERY agreeing wallet has a confirmed positive track record —
-        # conviction isn't actively building, so the bar shifts to
-        # "these are genuinely good traders" instead. Alerts above still
-        # fire for every signal regardless — this only gates the trade.
-        if momentum["trend"] == "growing":
-            trade_eligible, skip_reason = True, ""
-        elif momentum["trend"] == "steady":
-            trade_eligible, skip_reason = wallet_tracker.average_roi_is_positive(signal.agreeing_wallets)
-        else:
-            trade_eligible, skip_reason = False, f"momentum is '{momentum['trend']}'"
-
-        if not trade_eligible:
-            log.info("  -> not trading: %s", skip_reason)
-            continue
-
+        # TRADE ELIGIBILITY: previously gated behind confirmed momentum
+        # (growing, or steady with every agreeing wallet's average ROI
+        # positive) before a signal could reach a trade decision. Removed
+        # at Levi's request (2026-09-08) — every signal that clears the
+        # category consensus threshold above now gets the same
+        # Approve/Reject treatment regardless of momentum; his own tap is
+        # the filter, matching early movers and elite movers.
         if PAPER_MODE:
             execute_trade(signal)
         else:
