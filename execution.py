@@ -15,11 +15,25 @@ Setup required before this can do anything:
   3. Set these environment variables (NEVER commit them, NEVER hardcode
      them — set them in Render's dashboard as secret env vars):
        POLYMARKET_PRIVATE_KEY   - the wallet's private key
-       POLYMARKET_WALLET_ADDRESS - the wallet's public address
+       POLYMARKET_WALLET_ADDRESS - your Polymarket PROFILE address (the
+         proxy wallet that actually holds your funds/positions — check
+         this against the address your signing wallet itself reports; on
+         many accounts (browser-wallet / WalletConnect logins) these are
+         two different addresses, and it's the profile/proxy one that
+         belongs here)
   4. The wallet needs USDC trading approval set on Polymarket's exchange
      contracts — this typically happens automatically the first time you
      interact with Polymarket's UI using that wallet; verify this manually
      before relying on the bot to trade.
+
+Signature type: this file assumes your account trades through a proxy
+contract (signature_type=2 — the common case when you connected a wallet
+via WalletConnect/browser-wallet rather than trading as a raw EOA). If your
+Polymarket profile address is identical to your signing wallet's own
+address, you're trading as a plain EOA instead — change signature_type to
+0 and drop the funder argument in _get_client() below.
+UNVERIFIED against a live account — confirm against current py-clob-client
+docs/examples before trusting this with real size.
 """
 
 import os
@@ -49,7 +63,28 @@ def _get_client():
             "Real execution cannot proceed without it."
         )
 
-    client = ClobClient(CLOB_HOST, key=private_key, chain_id=POLYGON_CHAIN_ID)
+    funder = os.environ.get("POLYMARKET_WALLET_ADDRESS")
+    if not funder:
+        raise RuntimeError(
+            "POLYMARKET_WALLET_ADDRESS environment variable is not set. "
+            "This must be your Polymarket PROFILE address (the proxy that "
+            "holds your funds) — not your raw wallet's own address, if "
+            "those two differ for your account."
+        )
+
+    # signature_type=2: browser-wallet proxy (Polymarket deployed a proxy
+    # contract for this account, separate from the EOA behind the private
+    # key). If your account instead trades directly as an EOA (Polymarket
+    # profile address == wallet address), use signature_type=0 and drop
+    # `funder` instead. UNVERIFIED against a live account — confirm against
+    # current py-clob-client docs before trusting this with real size.
+    client = ClobClient(
+        CLOB_HOST,
+        key=private_key,
+        chain_id=POLYGON_CHAIN_ID,
+        signature_type=2,
+        funder=funder,
+    )
     # py-clob-client requires deriving/setting API credentials once per key.
     # NOTE: verify this call still matches the current py-clob-client
     # version's interface before relying on it — client libraries change.
