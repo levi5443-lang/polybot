@@ -12,26 +12,30 @@ trusting it with anything larger.
 Setup required before this can do anything:
   1. pip install py-clob-client
   2. A Polygon wallet, funded with USDC (or pUSD), private key available
-  3. Set these environment variables (NEVER commit them, NEVER hardcode
-     them — set them in Render's dashboard as secret env vars):
+  3. Set this environment variable (NEVER commit it, NEVER hardcode it —
+     set it in Render's dashboard as a secret env var):
        POLYMARKET_PRIVATE_KEY   - the wallet's private key
-       POLYMARKET_WALLET_ADDRESS - your Polymarket PROFILE address (the
-         proxy wallet that actually holds your funds/positions — check
-         this against the address your signing wallet itself reports; on
-         many accounts (browser-wallet / WalletConnect logins) these are
-         two different addresses, and it's the profile/proxy one that
-         belongs here)
   4. The wallet needs USDC trading approval set on Polymarket's exchange
      contracts — this typically happens automatically the first time you
-     interact with Polymarket's UI using that wallet; verify this manually
+     interact with Polymarket using that wallet; verify this manually
      before relying on the bot to trade.
 
-Signature type: this file assumes your account trades through a proxy
-contract (signature_type=2 — the common case when you connected a wallet
-via WalletConnect/browser-wallet rather than trading as a raw EOA). If your
-Polymarket profile address is identical to your signing wallet's own
-address, you're trading as a plain EOA instead — change signature_type to
-0 and drop the funder argument in _get_client() below.
+Signature type / account model (changed 2026-09-08, Levi's request): this
+account trades as a plain EOA — a Telegram-connected wallet used directly
+against Polymarket, with no separate polymarket.com profile/account and no
+proxy contract sitting in front of it. That's signature_type=0, no funder
+address needed — py-clob-client derives everything it needs from the
+private key itself.
+
+This file used to assume the OTHER common setup (signature_type=2, a
+separate proxy contract address from a browser-wallet/WalletConnect login,
+configured via a POLYMARKET_WALLET_ADDRESS env var) — that was the actual
+cause of every live trade reading a $0.00 balance and refusing to trade:
+the bot kept asking Polymarket about a proxy relationship that doesn't
+exist for this wallet. If this ever changes (e.g. Levi moves to a real
+Polymarket account with a browser-wallet login), switch signature_type
+back to 2 and reintroduce a funder address — see git history for the
+previous version of this function.
 UNVERIFIED against a live account — confirm against current py-clob-client
 docs/examples before trusting this with real size.
 """
@@ -63,27 +67,14 @@ def _get_client():
             "Real execution cannot proceed without it."
         )
 
-    funder = os.environ.get("POLYMARKET_WALLET_ADDRESS")
-    if not funder:
-        raise RuntimeError(
-            "POLYMARKET_WALLET_ADDRESS environment variable is not set. "
-            "This must be your Polymarket PROFILE address (the proxy that "
-            "holds your funds) — not your raw wallet's own address, if "
-            "those two differ for your account."
-        )
-
-    # signature_type=2: browser-wallet proxy (Polymarket deployed a proxy
-    # contract for this account, separate from the EOA behind the private
-    # key). If your account instead trades directly as an EOA (Polymarket
-    # profile address == wallet address), use signature_type=0 and drop
-    # `funder` instead. UNVERIFIED against a live account — confirm against
-    # current py-clob-client docs before trusting this with real size.
+    # signature_type=0: plain EOA — trades directly as the wallet behind
+    # POLYMARKET_PRIVATE_KEY, no proxy contract, no funder address. See the
+    # module docstring above for why this changed from signature_type=2.
     client = ClobClient(
         CLOB_HOST,
         key=private_key,
         chain_id=POLYGON_CHAIN_ID,
-        signature_type=2,
-        funder=funder,
+        signature_type=0,
     )
     # py-clob-client requires deriving/setting API credentials once per key.
     # NOTE: verify this call still matches the current py-clob-client
