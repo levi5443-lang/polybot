@@ -311,19 +311,13 @@ def run_elite_movers(data):
             end_date=move.get("end_date", ""), cur_price=move.get("cur_price", 0.0),
         )
 
-        # TRADE ELIGIBILITY: only follow a top-5 trader's move if their
-        # OWN category track record backs it up (proven win rate, a live
-        # winning streak) AND this bet's conviction is in line with their
-        # normal pattern — an outlier-sized bet could just as easily be
-        # a one-off gamble as genuine extra confidence. The alert above
-        # still fires regardless — this only gates the trade itself.
-        passed, reason = wallet_tracker.passes_elite_trade_filter(
-            move["wallet"], move["category"], move["size_usd"], move["market_id"], move["outcome"]
-        )
-        if not passed:
-            log.info("  -> not trading: %s", reason)
-            continue
-
+        # TRADE ELIGIBILITY: previously gated behind wallet_tracker's
+        # conviction/track-record filter (proven win rate + in-pattern bet
+        # size) before ever reaching a trade decision. Removed at Levi's
+        # request (2026-09-08) — that filter was silently absorbing every
+        # elite move before it could generate a live approval prompt, so
+        # elite moves now get the same Approve/Reject treatment as
+        # consensus and early-mover signals: his own tap is the filter.
         if PAPER_MODE:
             execute_trade(signal)
         else:
