@@ -212,25 +212,18 @@ def _execute_approved_trade(pending_record: dict) -> str:
 
     size_usd = risk_manager.compute_trade_size_usd(balance)
     if size_usd < 1.0:
-        # Includes which wallet address the bot is actually checking —
-        # added 2026-09-08 so a wrong/mismatched POLYMARKET_PRIVATE_KEY is
-        # visible right here in Telegram instead of needing server logs
-        # pulled every time this comes up. If POLYMARKET_WALLET_ADDRESS is
-        # also set (Levi's known-funded wallet), this now says explicitly
-        # whether the key actually matches it — read-only, never touches
-        # Render's env.
+        # Includes which wallet address the bot actually checked — added
+        # 2026-09-08 so this is visible right here in Telegram instead of
+        # needing server logs pulled every time. Read-only, never touches
+        # Render's env. See execution.get_wallet_status() for the
+        # proxy-vs-EOA account detection this relies on.
         status = execution.get_wallet_status()
-        base = (f"Blocked by the 26% total exposure cap (balance ${balance:,.2f} "
-                f"on wallet {status['resolved']}) — no action taken.")
-        if status["mismatch"] is True:
-            base += (f"\n\n⚠️ This does NOT match the funded wallet you told the bot "
-                      f"to expect ({status['expected']}). The key in Render still "
-                      f"isn't the right one — it controls a different, unfunded "
-                      f"wallet. Balance will stay $0.00 until the key actually "
-                      f"matches that address.")
-        elif status["mismatch"] is False:
-            base += "\n\n✅ This matches your funded wallet — the key is correct."
-        return base
+        if status["mode"] == "proxy":
+            wallet_desc = f"{status['trading_address']} (proxy; signed by {status['signer_address']})"
+        else:
+            wallet_desc = status.get("trading_address") or "unknown"
+        return (f"Blocked by the 26% total exposure cap (balance ${balance:,.2f} "
+                f"on wallet {wallet_desc}) — no action taken.")
 
     try:
         resp = execution.place_market_buy(token_id, size_usd)
@@ -308,17 +301,17 @@ def _handle_wallet_command() -> str:
     import execution
 
     status = execution.get_wallet_status()
-    lines = [f"Wallet in use: {status['resolved']}"]
+    if status["mode"] == "error":
+        return f"⚠️ Could not check the wallet: {status['error']}"
 
-    if status["expected"] is None:
-        lines.append(
-            "(Set POLYMARKET_WALLET_ADDRESS in Render to your funded wallet "
-            "and this will tell you automatically whether the key matches it.)"
-        )
-    elif status["mismatch"] is True:
-        lines.append(f"⚠️ Does NOT match your expected wallet ({status['expected']}).")
-    elif status["mismatch"] is False:
-        lines.append("✅ Matches your expected wallet.")
+    if status["mode"] == "proxy":
+        lines = [
+            f"Trading wallet: {status['trading_address']}",
+            f"Signed by: {status['signer_address']} (this is expected to be a "
+            f"different address — that's how proxy/Telegram-connected accounts work)",
+        ]
+    else:
+        lines = [f"Trading wallet: {status['trading_address']}"]
 
     try:
         balance = execution.get_wallet_balance_usd()

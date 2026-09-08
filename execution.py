@@ -20,22 +20,34 @@ Setup required before this can do anything:
      interact with Polymarket using that wallet; verify this manually
      before relying on the bot to trade.
 
-Signature type / account model (changed 2026-09-08, Levi's request): this
-account trades as a plain EOA — a Telegram-connected wallet used directly
-against Polymarket, with no separate polymarket.com profile/account and no
-proxy contract sitting in front of it. That's signature_type=0, no funder
-address needed — py-clob-client derives everything it needs from the
-private key itself.
+Signature type / account model (rewritten 2026-09-08, again, after the
+"plain EOA" assumption below turned out to be wrong for this account):
 
-This file used to assume the OTHER common setup (signature_type=2, a
-separate proxy contract address from a browser-wallet/WalletConnect login,
-configured via a POLYMARKET_WALLET_ADDRESS env var) — that was the actual
-cause of every live trade reading a $0.00 balance and refusing to trade:
-the bot kept asking Polymarket about a proxy relationship that doesn't
-exist for this wallet. If this ever changes (e.g. Levi moves to a real
-Polymarket account with a browser-wallet login), switch signature_type
-back to 2 and reintroduce a funder address — see git history for the
-previous version of this function.
+This now AUTO-DETECTS which kind of account it's dealing with, instead of
+hardcoding one assumption that kept not matching reality:
+
+  - If POLYMARKET_WALLET_ADDRESS is unset, or equals the address
+    POLYMARKET_PRIVATE_KEY itself resolves to: plain EOA account
+    (signature_type=0). The key trades directly as its own address, no
+    funder needed.
+
+  - If POLYMARKET_WALLET_ADDRESS is set AND differs from the key's own
+    address: proxy/smart-contract wallet account (signature_type=2,
+    funder=POLYMARKET_WALLET_ADDRESS). The private key SIGNS orders, but
+    the actual funds and trades live at the separate funder address.
+
+Why this matters: "connected to Polymarket via Telegram" (Levi's account)
+describes Polymarket's email/social-login onboarding, which deploys
+exactly this kind of proxy wallet behind the scenes — a signing key at one
+address, real funds at a different address, by design. Earlier today this
+file assumed a plain EOA (because Levi doesn't have a traditional
+polymarket.com/browser-wallet account) and treated the key resolving to a
+DIFFERENT address than his funded wallet as a broken/mismatched key. It
+wasn't broken — the key was correct the whole time. It's a proxy account,
+and the two addresses are SUPPOSED to differ. No further key changes
+should be needed once POLYMARKET_WALLET_ADDRESS is set correctly in
+Render — see get_wallet_status() below for the self-check.
+
 UNVERIFIED against a live account — confirm against current py-clob-client
 docs/examples before trusting this with real size.
 """
@@ -92,6 +104,46 @@ def _with_timeout(fn, *args, **kwargs):
         signal.signal(signal.SIGALRM, previous_handler)
 
 
+def _resolve_account_config():
+    """Figure out whether this is a plain EOA or a proxy/smart-contract
+    wallet account, and which address actually holds funds and receives
+    orders. See the module docstring above for the full reasoning.
+
+    Returns (private_key, signer_address, trading_address, signature_type).
+    Raises RuntimeError if POLYMARKET_PRIVATE_KEY is missing or malformed.
+    """
+    private_key = os.environ.get("POLYMARKET_PRIVATE_KEY")
+    if not private_key:
+        raise RuntimeError(
+            "POLYMARKET_PRIVATE_KEY environment variable is not set. "
+            "Real execution cannot proceed without it."
+        )
+
+    try:
+        from eth_account import Account
+        signer_address = Account.from_key(private_key).address
+    except Exception as e:
+        raise RuntimeError(
+            f"POLYMARKET_PRIVATE_KEY is malformed — could not derive an "
+            f"address from it: {e}"
+        )
+
+    funder_address = os.environ.get("POLYMARKET_WALLET_ADDRESS")
+    if funder_address and funder_address.strip().lower() != signer_address.strip().lower():
+        log.info(
+            "Proxy/smart-contract wallet mode: signing key %s controls "
+            "trading account %s (from POLYMARKET_WALLET_ADDRESS). This is "
+            "normal for an account created via email/Telegram/social login "
+            "rather than a browser wallet — the two addresses are supposed "
+            "to differ.",
+            signer_address, funder_address,
+        )
+        return private_key, signer_address, funder_address, 2
+
+    log.info("Plain EOA mode: trading directly as %s.", signer_address)
+    return private_key, signer_address, signer_address, 0
+
+
 def _get_client():
     """Build an authenticated CLOB client. Imports py-clob-client lazily so
     the rest of the bot works fine even if that package isn't installed —
@@ -103,113 +155,62 @@ def _get_client():
             "py-clob-client isn't installed. Run: pip install py-clob-client"
         )
 
-    private_key = os.environ.get("POLYMARKET_PRIVATE_KEY")
-    if not private_key:
-        raise RuntimeError(
-            "POLYMARKET_PRIVATE_KEY environment variable is not set. "
-            "Real execution cannot proceed without it."
+    private_key, signer_address, trading_address, signature_type = _resolve_account_config()
+
+    if signature_type == 2:
+        client = ClobClient(
+            CLOB_HOST,
+            key=private_key,
+            chain_id=POLYGON_CHAIN_ID,
+            signature_type=2,
+            funder=trading_address,
         )
-
-    # Log which address this key actually resolves to. A wrong or
-    # mismatched key never errors here — eth_account happily derives SOME
-    # valid address from any well-formed hex key, it just won't be the
-    # funded wallet's address, and the bot would go on to correctly (and
-    # silently) report a real $0.00 balance for that other wallet. This
-    # line is the one place that lets Levi directly compare "the address
-    # the bot is actually using" against his real funded wallet, instead
-    # of guessing whether a newly-pasted key took effect. (2026-09-08)
-    try:
-        from eth_account import Account
-        derived_address = Account.from_key(private_key).address
-        log.info("POLYMARKET_PRIVATE_KEY resolves to wallet address: %s", derived_address)
-    except Exception as e:
-        derived_address = None
-        log.warning("Could not derive an address from POLYMARKET_PRIVATE_KEY "
-                    "to sanity-check it (this may indicate a malformed key): %s", e)
-
-    # If Levi has also set POLYMARKET_WALLET_ADDRESS (his known-funded
-    # wallet), cross-check it against what the key actually resolves to —
-    # purely a read of the environment, never a write to it. Loud on
-    # mismatch so this is impossible to miss in the logs. (2026-09-08)
-    expected_address = os.environ.get("POLYMARKET_WALLET_ADDRESS")
-    if expected_address and derived_address:
-        if expected_address.strip().lower() != derived_address.strip().lower():
-            log.error(
-                "WALLET MISMATCH: POLYMARKET_PRIVATE_KEY resolves to %s but "
-                "POLYMARKET_WALLET_ADDRESS says the funded wallet is %s. "
-                "This key does NOT control the funded wallet — trades will "
-                "keep reading a $0.00 balance until the key in Render "
-                "actually matches this address.",
-                derived_address, expected_address,
-            )
-        else:
-            log.info("Wallet check OK: POLYMARKET_PRIVATE_KEY matches "
-                      "POLYMARKET_WALLET_ADDRESS (%s).", expected_address)
-
-    # signature_type=0: plain EOA — trades directly as the wallet behind
-    # POLYMARKET_PRIVATE_KEY, no proxy contract, no funder address. See the
-    # module docstring above for why this changed from signature_type=2.
-    client = ClobClient(
-        CLOB_HOST,
-        key=private_key,
-        chain_id=POLYGON_CHAIN_ID,
-        signature_type=0,
-    )
+    else:
+        client = ClobClient(
+            CLOB_HOST,
+            key=private_key,
+            chain_id=POLYGON_CHAIN_ID,
+            signature_type=0,
+        )
     # py-clob-client requires deriving/setting API credentials once per key.
     # NOTE: verify this call still matches the current py-clob-client
     # version's interface before relying on it — client libraries change.
     client.set_api_creds(client.create_or_derive_api_creds())
-    client._resolved_address = derived_address  # stashed for get_wallet_address() below
+    client._signer_address = signer_address    # stashed for get_wallet_status() below
+    client._trading_address = trading_address
     return client
-
-
-def get_wallet_address() -> str:
-    """Returns the wallet address POLYMARKET_PRIVATE_KEY actually resolves
-    to, or 'unknown' if it couldn't be derived. Used to surface this in
-    Telegram messages so it's directly visible without checking server
-    logs — see the comment in _get_client() above for why this matters."""
-    private_key = os.environ.get("POLYMARKET_PRIVATE_KEY")
-    if not private_key:
-        return "unknown (POLYMARKET_PRIVATE_KEY not set)"
-    try:
-        from eth_account import Account
-        return Account.from_key(private_key).address
-    except Exception:
-        return "unknown (couldn't derive from POLYMARKET_PRIVATE_KEY)"
 
 
 def get_wallet_status() -> dict:
     """Read-only sanity check — never writes anything, never touches Render.
 
-    Added 2026-09-08 after several rounds of Levi manually pasting a new
-    POLYMARKET_PRIVATE_KEY into Render and it still not matching his funded
-    wallet (0xf0D6...198 kept showing up instead of the expected
-    0xeF566a...D07). Rather than me updating Render's env vars — Levi has
-    asked that I not touch them — this lets the *env itself* declare what
-    it's supposed to be: if he also sets an optional POLYMARKET_WALLET_ADDRESS
-    env var to his real funded wallet address, the bot compares it against
-    what the private key actually resolves to on every balance/trade check,
-    and says plainly whether they match. If POLYMARKET_WALLET_ADDRESS isn't
-    set, this just reports the resolved address with no comparison — still
-    useful, just not self-checking.
-
     Returns:
-        {"resolved": <address the private key resolves to, or an
-                      "unknown (...)" message>,
-         "expected": <POLYMARKET_WALLET_ADDRESS value, or None if unset>,
-         "mismatch": True  -> both are set and they don't match
-                     False -> both are set and they match
-                     None  -> nothing to compare (expected unset, or
-                              resolved couldn't be derived)}
+        {"signer_address": <address POLYMARKET_PRIVATE_KEY resolves to>,
+         "trading_address": <address actually used for balance/orders —
+                              same as signer_address in EOA mode, or
+                              POLYMARKET_WALLET_ADDRESS in proxy mode>,
+         "mode": "proxy" | "eoa" | "error",
+         "error": <set only when mode == "error">}
     """
-    resolved = get_wallet_address()
-    expected = os.environ.get("POLYMARKET_WALLET_ADDRESS")
-    if not expected:
-        return {"resolved": resolved, "expected": None, "mismatch": None}
-    if not resolved or resolved.startswith("unknown"):
-        return {"resolved": resolved, "expected": expected, "mismatch": None}
-    mismatch = resolved.strip().lower() != expected.strip().lower()
-    return {"resolved": resolved, "expected": expected, "mismatch": mismatch}
+    try:
+        _, signer_address, trading_address, signature_type = _resolve_account_config()
+    except Exception as e:
+        return {"signer_address": None, "trading_address": None, "mode": "error", "error": str(e)}
+    return {
+        "signer_address": signer_address,
+        "trading_address": trading_address,
+        "mode": "proxy" if signature_type == 2 else "eoa",
+    }
+
+
+def get_wallet_address() -> str:
+    """Back-compat helper: returns the address actually used for
+    balance/orders (see get_wallet_status), or an 'unknown (...)' message
+    if it couldn't be determined."""
+    status = get_wallet_status()
+    if status["mode"] == "error":
+        return f"unknown ({status['error']})"
+    return status["trading_address"]
 
 
 def get_wallet_balance_usd() -> float:
