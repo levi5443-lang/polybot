@@ -26,6 +26,19 @@ Flow:
 
 Paper trades never go through this — they still auto-log immediately via
 execute_trade() in consensus_bot.py, since no real money is at risk.
+
+TEXT COMMANDS (/positions, /history, /accuracy, /resetpaper, /help): these
+used to be handled by a Telegram WEBHOOK in webapp/main.py. A webhook and
+this worker's own getUpdates polling can't both be registered on the same
+bot at once — Telegram returns 409 Conflict if you try — so once the
+webhook got deleted (to fix that exact 409 blocking Approve/Reject taps),
+those commands stopped getting any reply. Rather than re-adding the
+webhook and reintroducing that conflict, process_pending_approvals() below
+now also handles plain-text messages itself, reusing the exact same
+trade_tracker/risk_manager functions the webhook used to call. Same
+tradeoff as button taps: a command's reply can take up to
+POLL_INTERVAL_SECONDS to arrive, since it's picked up on the worker's next
+cycle rather than instantly.
 """
 
 import logging
@@ -39,12 +52,23 @@ from telegram_alert import (
 )
 import risk_manager
 import wallet_tracker
+import trade_tracker
+import os
 
 log = logging.getLogger("trade_approval")
 
 PENDING_APPROVALS_KEY = "pending_approvals.json"
 LAST_UPDATE_ID_KEY = "telegram_last_update_id.json"
 APPROVAL_TIMEOUT_MINUTES = 60
+
+HELP_TEXT = (
+    "Available commands:\n"
+    "/positions — currently open trades\n"
+    "/history — most recent resolved trades\n"
+    "/accuracy — overall win rate + ROI + open trade count\n"
+    "/resetpaper — wipe paper trade history (asks to confirm first)\n"
+    "/help — this message"
+)
 
 
 def _load_pending() -> dict:
@@ -210,17 +234,56 @@ def _expire_stale_approvals(pending: dict) -> dict:
     return still_pending
 
 
+def _handle_text_command(text: str) -> None:
+    """Mirrors the /positions, /history, /accuracy, /resetpaper, /help
+    handling that used to live in webapp/main.py's Telegram webhook,
+    before that webhook was deleted to fix the getUpdates 409 conflict.
+    Sends its reply the same way approve/reject confirmations are sent."""
+    text = text.strip()
+    if text.startswith("/positions"):
+        reply = trade_tracker.format_open_positions_message()
+    elif text.startswith("/history"):
+        reply = trade_tracker.format_history_message()
+    elif text.startswith("/accuracy"):
+        reply = trade_tracker.format_accuracy_command_message()
+    elif text.startswith("/resetpaper confirm"):
+        removed = risk_manager.reset_paper_trades()
+        reply = f"✅ Cleared {removed} paper trade(s). Starting fresh."
+    elif text.startswith("/resetpaper"):
+        reply = ("⚠️ This will permanently delete ALL paper trade history "
+                  "(open and resolved) — accuracy, ROI, everything. Live trades "
+                  "are never affected.\n\nSend /resetpaper confirm to proceed, "
+                  "or ignore this to cancel.")
+    elif text.startswith("/help") or text.startswith("/start"):
+        reply = HELP_TEXT
+    else:
+        reply = f"Unknown command.\n\n{HELP_TEXT}"
+    send_telegram_alert(reply)
+
+
 def process_pending_approvals() -> None:
-    """Call this once per cycle. Polls for button taps, executes/drops
-    accordingly, and expires anything too old to still be relevant."""
+    """Call this once per cycle. Polls for button taps AND text commands
+    (/positions, /history, /accuracy, /resetpaper, /help), executes/drops
+    approvals accordingly, and expires anything too old to still be
+    relevant."""
     last_update_id = _load_last_update_id()
     updates = get_telegram_updates(offset=last_update_id + 1)
 
     pending = _load_pending()
     highest_seen = last_update_id
+    authorized_chat_id = os.environ.get("TELEGRAM_CHAT_ID")
 
     for update in updates:
         highest_seen = max(highest_seen, update.get("update_id", 0))
+
+        message = update.get("message")
+        if message is not None:
+            chat_id = str(message.get("chat", {}).get("id", ""))
+            text = (message.get("text") or "").strip()
+            if text and authorized_chat_id and chat_id == str(authorized_chat_id):
+                _handle_text_command(text)
+            continue
+
         callback = update.get("callback_query")
         if not callback:
             continue
