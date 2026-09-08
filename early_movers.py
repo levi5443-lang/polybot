@@ -27,7 +27,11 @@ signals are for).
 MIN_EARLY_MOVERS was temporarily held at 1 (instead of the intended 2)
 while confirming the creationDate-based "new market" fix actually
 produced real overlap — confirmed, and reverted to 2 on 2026-09-08 per
-Levi's request.
+Levi's request. Later that same day, changed to 1 again — this time as
+the actual intended long-term value, per Levi's explicit request — so a
+single qualifying wallet (one that clears the wallet quality gate below)
+getting into a brand-new market is now enough to fire the signal on its
+own, no second wallet needs to agree.
 
 WALLET QUALITY GATE (added 2026-09-08, Levi's request): a wallet's
 position only counts toward an early-mover signal at all if that wallet
@@ -52,7 +56,7 @@ import wallet_tracker
 
 log = logging.getLogger("early_movers")
 
-MIN_EARLY_MOVERS = 2  # restored to the intended value 2026-09-08. See note above.
+MIN_EARLY_MOVERS = 1  # changed to 1 (the actual final value) 2026-09-08. See note above.
 NEWEST_EVENTS_TO_CHECK = 100  # how many of Polymarket's newest events to look at each cycle
 NEW_MARKET_MAX_AGE_MINUTES = 60  # raised from 10 to 60 at Levi's request (2026-09-08) —
                                   # widens the "brand-new market" window to a full hour
