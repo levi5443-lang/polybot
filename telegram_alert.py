@@ -75,6 +75,19 @@ def send_telegram_message_with_buttons(message: str, buttons: list[list[dict]],
         return False
 
 
+def _telegram_error_detail(resp) -> str:
+    """Telegram's error responses carry the actual reason in the JSON body
+    (e.g. 'query is too old and response timeout expired or query ID is
+    invalid') — resp.raise_for_status() alone only gives a generic '400
+    Client Error', which hides that. Returns the body's description if
+    parseable, else a short fallback."""
+    try:
+        body = resp.json()
+        return body.get("description") or str(body)
+    except Exception:
+        return (resp.text or "")[:300]
+
+
 def get_telegram_updates(offset: int = None, bot_token: str = None, timeout: int = 0) -> list[dict]:
     """Poll Telegram for updates (messages, button taps) since `offset`.
     Returns an empty list on any failure — a polling hiccup should never
@@ -93,7 +106,8 @@ def get_telegram_updates(offset: int = None, bot_token: str = None, timeout: int
         resp.raise_for_status()
         return resp.json().get("result", [])
     except requests.RequestException as e:
-        log.error("Failed to fetch Telegram updates: %s", e)
+        detail = _telegram_error_detail(e.response) if e.response is not None else str(e)
+        log.error("Failed to fetch Telegram updates: %s", detail)
         return []
 
 
@@ -101,7 +115,10 @@ def answer_callback_query(callback_query_id: str, text: str = None,
                            bot_token: str = None) -> bool:
     """Acknowledge a button tap — Telegram shows a loading spinner on the
     user's client until this is called, regardless of whether there's
-    anything to actually tell them."""
+    anything to actually tell them. IMPORTANT: a failure here does NOT
+    mean the tap was ignored — trade_approval.py always runs the actual
+    approve/reject action first and treats this purely as a courtesy
+    notification; see process_pending_approvals()."""
     bot_token = bot_token or os.environ.get("TELEGRAM_BOT_TOKEN")
     if not bot_token:
         return False
@@ -116,7 +133,8 @@ def answer_callback_query(callback_query_id: str, text: str = None,
         resp.raise_for_status()
         return True
     except requests.RequestException as e:
-        log.error("Failed to answer callback query: %s", e)
+        detail = _telegram_error_detail(e.response) if e.response is not None else str(e)
+        log.error("Failed to answer callback query (tap itself is still processed): %s", detail)
         return False
 
 

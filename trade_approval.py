@@ -191,8 +191,14 @@ def _execute_approved_trade(pending_record: dict) -> str:
     if risk_manager.has_ever_traded(market_id, outcome, mode="live"):
         return "Already traded this market before (open or resolved) — no action taken."
 
-    if risk_manager.daily_loss_cap_reached():
-        return "Daily loss cap already reached — no action taken."
+    # Daily realized-loss cap check removed here (2026-09-08, Levi's
+    # request) — no longer blocks approved trades regardless of today's
+    # realized losses. NOTE: this call site was left behind pointing at
+    # risk_manager.daily_loss_cap_reached(), which had already been
+    # deleted from risk_manager.py — every Approve tap since then raised
+    # an AttributeError right here, before the order could ever be
+    # placed or a confirmation sent. That's the actual root cause of
+    # "nothing happens" on Approve/Reject (2026-09-08 fix).
 
     if not token_id:
         return "No token ID available for this market — cannot place a real order."
@@ -310,11 +316,28 @@ def process_pending_approvals() -> None:
             continue
 
         if action == "approve":
-            result = _execute_approved_trade(record)
+            log.info("Approve tapped [%s] for '%s' [%s] — executing...",
+                      short_id, record["market_question"], record["outcome"])
+            try:
+                result = _execute_approved_trade(record)
+            except Exception as e:
+                # This is exactly the class of bug that caused "nothing
+                # happens" before (2026-09-08): an uncaught exception here
+                # used to blow up the whole poll cycle silently — no
+                # confirmation sent, pending entry never cleared, no clear
+                # log line. Now it's caught, logged with the real error,
+                # and you still get a Telegram message so you know it failed
+                # instead of just seeing the button do nothing.
+                log.error("Approve [%s] for '%s' raised an exception: %s",
+                           short_id, record["market_question"], e, exc_info=True)
+                result = f"⚠️ Internal error while executing this trade: {e}"
+            log.info("Approve [%s] result: %s", short_id, result)
             answer_callback_query(callback_id, text="Processing...")
             send_telegram_alert(f"*{record['market_question']}*\n{result}")
             del pending[short_id]
         elif action == "reject":
+            log.info("Reject tapped [%s] for '%s' [%s]",
+                      short_id, record["market_question"], record["outcome"])
             answer_callback_query(callback_id, text="Rejected.")
             send_telegram_alert(f"❌ Rejected: {record['market_question']}")
             del pending[short_id]
