@@ -10,6 +10,7 @@ apex_signal_bot token, so a bug here can't affect your live signal channel.
 """
 
 import os
+import json
 import logging
 import requests
 from datetime import datetime
@@ -91,13 +92,31 @@ def _telegram_error_detail(resp) -> str:
 def get_telegram_updates(offset: int = None, bot_token: str = None, timeout: int = 0) -> list[dict]:
     """Poll Telegram for updates (messages, button taps) since `offset`.
     Returns an empty list on any failure — a polling hiccup should never
-    crash a poll cycle."""
+    crash a poll cycle.
+
+    IMPORTANT (fixed 2026-09-08, Levi's request): always explicitly asks
+    for BOTH "message" and "callback_query" update types via
+    allowed_updates. This bot used to be behind a Telegram webhook (see
+    webapp/main.py's /telegram-webhook, which only ever handled
+    "message") before switching to this polling approach — and Telegram
+    remembers whatever allowed_updates list was last set for a bot
+    (whether set via setWebhook or getUpdates) and keeps silently
+    filtering future getUpdates calls to just that list, with NO error,
+    until a call explicitly asks for something wider. That's almost
+    certainly why text commands (/positions etc.) were working fine while
+    every single Approve/Reject button tap vanished without a trace —
+    callback_query was never in the allowed list to begin with. Passing
+    it explicitly on every call keeps this from silently regressing again
+    even if something else touches allowed_updates in the future."""
     bot_token = bot_token or os.environ.get("TELEGRAM_BOT_TOKEN")
     if not bot_token:
         return []
 
     url = f"{TELEGRAM_API_BASE}/bot{bot_token}/getUpdates"
-    params = {"timeout": timeout}
+    params = {
+        "timeout": timeout,
+        "allowed_updates": json.dumps(["message", "callback_query"]),
+    }
     if offset is not None:
         params["offset"] = offset
 
