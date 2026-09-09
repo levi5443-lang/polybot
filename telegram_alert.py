@@ -10,7 +10,6 @@ apex_signal_bot token, so a bug here can't affect your live signal channel.
 """
 
 import os
-import json
 import logging
 import requests
 from datetime import datetime
@@ -76,47 +75,16 @@ def send_telegram_message_with_buttons(message: str, buttons: list[list[dict]],
         return False
 
 
-def _telegram_error_detail(resp) -> str:
-    """Telegram's error responses carry the actual reason in the JSON body
-    (e.g. 'query is too old and response timeout expired or query ID is
-    invalid') — resp.raise_for_status() alone only gives a generic '400
-    Client Error', which hides that. Returns the body's description if
-    parseable, else a short fallback."""
-    try:
-        body = resp.json()
-        return body.get("description") or str(body)
-    except Exception:
-        return (resp.text or "")[:300]
-
-
 def get_telegram_updates(offset: int = None, bot_token: str = None, timeout: int = 0) -> list[dict]:
     """Poll Telegram for updates (messages, button taps) since `offset`.
     Returns an empty list on any failure — a polling hiccup should never
-    crash a poll cycle.
-
-    IMPORTANT (fixed 2026-09-08, Levi's request): always explicitly asks
-    for BOTH "message" and "callback_query" update types via
-    allowed_updates. This bot used to be behind a Telegram webhook (see
-    webapp/main.py's /telegram-webhook, which only ever handled
-    "message") before switching to this polling approach — and Telegram
-    remembers whatever allowed_updates list was last set for a bot
-    (whether set via setWebhook or getUpdates) and keeps silently
-    filtering future getUpdates calls to just that list, with NO error,
-    until a call explicitly asks for something wider. That's almost
-    certainly why text commands (/positions etc.) were working fine while
-    every single Approve/Reject button tap vanished without a trace —
-    callback_query was never in the allowed list to begin with. Passing
-    it explicitly on every call keeps this from silently regressing again
-    even if something else touches allowed_updates in the future."""
+    crash a poll cycle."""
     bot_token = bot_token or os.environ.get("TELEGRAM_BOT_TOKEN")
     if not bot_token:
         return []
 
     url = f"{TELEGRAM_API_BASE}/bot{bot_token}/getUpdates"
-    params = {
-        "timeout": timeout,
-        "allowed_updates": json.dumps(["message", "callback_query"]),
-    }
+    params = {"timeout": timeout}
     if offset is not None:
         params["offset"] = offset
 
@@ -125,8 +93,7 @@ def get_telegram_updates(offset: int = None, bot_token: str = None, timeout: int
         resp.raise_for_status()
         return resp.json().get("result", [])
     except requests.RequestException as e:
-        detail = _telegram_error_detail(e.response) if e.response is not None else str(e)
-        log.error("Failed to fetch Telegram updates: %s", detail)
+        log.error("Failed to fetch Telegram updates: %s", e)
         return []
 
 
@@ -134,10 +101,7 @@ def answer_callback_query(callback_query_id: str, text: str = None,
                            bot_token: str = None) -> bool:
     """Acknowledge a button tap — Telegram shows a loading spinner on the
     user's client until this is called, regardless of whether there's
-    anything to actually tell them. IMPORTANT: a failure here does NOT
-    mean the tap was ignored — trade_approval.py always runs the actual
-    approve/reject action first and treats this purely as a courtesy
-    notification; see process_pending_approvals()."""
+    anything to actually tell them."""
     bot_token = bot_token or os.environ.get("TELEGRAM_BOT_TOKEN")
     if not bot_token:
         return False
@@ -152,8 +116,7 @@ def answer_callback_query(callback_query_id: str, text: str = None,
         resp.raise_for_status()
         return True
     except requests.RequestException as e:
-        detail = _telegram_error_detail(e.response) if e.response is not None else str(e)
-        log.error("Failed to answer callback query (tap itself is still processed): %s", detail)
+        log.error("Failed to answer callback query: %s", e)
         return False
 
 
@@ -281,6 +244,17 @@ def _format_resolution_and_return_lines(end_date: str, cur_price: float) -> str:
     return lines
 
 
+def _format_market_url_line(event_slug: str) -> str:
+    """A direct link to THIS specific market's own page on Polymarket —
+    not a homepage or search link. Purely informational/navigational;
+    whatever happens after clicking is on Polymarket's own site, under
+    their own rules, same as if the link had been typed in directly.
+    Omitted entirely if we don't have a slug to build it from."""
+    if not event_slug:
+        return ""
+    return f"View on Polymarket: https://polymarket.com/event/{event_slug}\n"
+
+
 def format_consensus_message(signal, total_tracked: int, wallet_ranks: dict = None,
                               pool_size: int = None, wallet_records: dict = None,
                               wallet_rois: dict = None, wallet_ages: dict = None,
@@ -302,6 +276,7 @@ def format_consensus_message(signal, total_tracked: int, wallet_ranks: dict = No
         f"{_format_momentum_line(momentum_str)}"
         f"{_format_resolution_and_return_lines(signal.end_date, signal.cur_price)}"
         f"Aggregate size: ${signal.total_size_usd:,.0f}\n"
+        f"{_format_market_url_line(signal.event_slug)}"
     )
 
 
@@ -324,6 +299,7 @@ def format_early_mover_message(signal, wallet_ranks: dict = None, pool_size: int
         f"{_format_price_move_line(signal, wallet_ranks, wallet_price_changes)}"
         f"{_format_resolution_and_return_lines(signal.end_date, signal.cur_price)}"
         f"Aggregate size: ${signal.total_size_usd:,.0f}\n"
+        f"{_format_market_url_line(signal.event_slug)}"
     )
 
 
@@ -371,4 +347,5 @@ def format_elite_mover_message(move: dict, pool_size: int = None, record_str: st
         f"{_format_resolution_and_return_lines(move.get('end_date', ''), move.get('cur_price', 0.0))}"
         f"Position size: ${move['size_usd']:,.0f}\n"
         f"{conviction_line}"
+        f"{_format_market_url_line(move.get('event_slug', ''))}"
     )

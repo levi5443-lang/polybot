@@ -21,6 +21,7 @@ class Position:
     token_id: str = ""
     end_date: str = ""     # market's expected resolution date, as reported by Polymarket
     cur_price: float = 0.0 # current market price for this specific outcome (0-1)
+    event_slug: str = ""   # for building a link to the market's public Polymarket page
 
 
 @dataclass
@@ -35,6 +36,7 @@ class ConsensusSignal:
     token_id: str = ""
     end_date: str = ""
     cur_price: float = 0.0
+    event_slug: str = ""
 
     @property
     def count(self) -> int:
@@ -110,6 +112,7 @@ def parse_positions(wallet: str, raw: list[dict], min_size: float = MIN_POSITION
             token_id=str(p.get("asset") or ""),
             end_date=str(p.get("endDate") or ""),
             cur_price=cur_price,
+            event_slug=str(p.get("eventSlug") or ""),
         ))
     return out
 
@@ -122,7 +125,8 @@ def compute_consensus(all_positions: list[Position], threshold: int = CONSENSUS_
             grouped[key] = ConsensusSignal(
                 pos.market_id, pos.market_question, pos.outcome,
                 event_id=pos.event_id, token_id=pos.token_id,
-                end_date=pos.end_date, cur_price=pos.cur_price
+                end_date=pos.end_date, cur_price=pos.cur_price,
+                event_slug=pos.event_slug
             )
         signal = grouped[key]
         if pos.wallet not in signal.agreeing_wallets:
