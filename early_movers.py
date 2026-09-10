@@ -1,7 +1,7 @@
 """
 early_movers.py — flag brand-new Polymarket events where our tracked
 top-100 traders are already positioned, on the same side, within the
-first hour of the market appearing.
+first 24 hours of the market appearing.
 
 This is a genuinely different signal from category consensus: it doesn't
 require a market to have accumulated enough activity to rank into any
@@ -33,14 +33,14 @@ single qualifying wallet (one that clears the wallet quality gate below)
 getting into a brand-new market is now enough to fire the signal on its
 own, no second wallet needs to agree.
 
-WALLET QUALITY GATE (added 2026-09-08, Levi's request): a wallet's
-position only counts toward an early-mover signal at all if that wallet
-is ranked in the top EARLY_MOVER_MAX_RANK overall (wallet_overall_rank —
-the same all-categories-combined ROI ranking elite movers uses, just a
-wider cutoff: 20 instead of 5), has at least EARLY_MOVER_MIN_RESOLVED
-resolved positions on record, and has an overall win rate above
-EARLY_MOVER_MIN_WIN_RATE_PCT. Positions from wallets that don't clear all
-three never reach the consensus/threshold check below. This is separate
+WALLET QUALITY GATE (added 2026-09-08, Levi's request; win-rate leg
+removed 2026-09-10 per Levi's request): a wallet's position only counts
+toward an early-mover signal at all if that wallet is ranked in the top
+EARLY_MOVER_MAX_RANK overall (wallet_overall_rank — the same
+all-categories-combined ROI ranking elite movers uses, just a wider
+cutoff: 20 instead of 5) and has at least EARLY_MOVER_MIN_RESOLVED
+resolved positions on record. Positions from wallets that don't clear
+both never reach the consensus/threshold check below. This is separate
 from — and in addition to — the PAPER-trade-only gate in
 consensus_bot.py's run_early_movers (2 consecutive wins + positive
 average ROI across the agreeing wallets), which controls whether a
@@ -58,12 +58,13 @@ log = logging.getLogger("early_movers")
 
 MIN_EARLY_MOVERS = 1  # changed to 1 (the actual final value) 2026-09-08. See note above.
 NEWEST_EVENTS_TO_CHECK = 100  # how many of Polymarket's newest events to look at each cycle
-NEW_MARKET_MAX_AGE_MINUTES = 60  # raised from 10 to 60 at Levi's request (2026-09-08) —
-                                  # widens the "brand-new market" window to a full hour
+NEW_MARKET_MAX_AGE_MINUTES = 1440  # raised from 60 to 1440 (24h) at Levi's request (2026-09-10) —
+                                    # widens the "brand-new market" window to a full day
 
 EARLY_MOVER_MAX_RANK = 20        # wallet_overall_rank cutoff for signal eligibility
 EARLY_MOVER_MIN_RESOLVED = 5     # minimum resolved positions (overall) before a wallet counts
-EARLY_MOVER_MIN_WIN_RATE_PCT = 66.0  # must be STRICTLY above this (overall win rate)
+# EARLY_MOVER_MIN_WIN_RATE_PCT removed 2026-09-10 (Levi's request) — win rate is no
+# longer part of the wallet quality gate below.
 
 from shared_storage import get_json, set_json
 
@@ -96,11 +97,10 @@ def find_early_movers(all_positions: list, category_map: dict, wallet_rank: dict
     """Returns a list of ConsensusSignal for brand-new markets where at
     least MIN_EARLY_MOVERS QUALIFYING wallets (see the wallet quality
     gate in the module docstring — top EARLY_MOVER_MAX_RANK overall,
-    EARLY_MOVER_MIN_RESOLVED+ resolved positions, win rate above
-    EARLY_MOVER_MIN_WIN_RATE_PCT) are already on the same side. Each
-    signal's .category is the real category (Sports, Politics, etc.) —
-    callers should present these as a distinct alert type, not mix them
-    into regular per-category consensus output.
+    EARLY_MOVER_MIN_RESOLVED+ resolved positions) are already on the same
+    side. Each signal's .category is the real category (Sports, Politics,
+    etc.) — callers should present these as a distinct alert type, not
+    mix them into regular per-category consensus output.
     """
     try:
         newest_events = fetch_newest_events(limit=NEWEST_EVENTS_TO_CHECK)
@@ -161,7 +161,7 @@ def find_early_movers(all_positions: list, category_map: dict, wallet_rank: dict
               len({p.wallet for p in new_market_positions}))
 
     # WALLET QUALITY GATE — see module docstring. Only positions from
-    # wallets that clear rank + resolved-count + win-rate ever reach the
+    # wallets that clear rank + resolved-count ever reach the
     # consensus/threshold check below.
     qualifying_positions = []
     for p in new_market_positions:
@@ -171,14 +171,12 @@ def find_early_movers(all_positions: list, category_map: dict, wallet_rank: dict
         rec = wallet_tracker.get_wallet_overall_record(p.wallet)
         if rec["total_resolved"] < EARLY_MOVER_MIN_RESOLVED:
             continue
-        if rec["win_rate_pct"] is None or rec["win_rate_pct"] <= EARLY_MOVER_MIN_WIN_RATE_PCT:
-            continue
         qualifying_positions.append(p)
 
     log.info("Early movers: %d/%d position(s) pass the wallet quality gate "
-              "(top %d rank, %d+ resolved, win rate > %.0f%%).",
+              "(top %d rank, %d+ resolved).",
               len(qualifying_positions), len(new_market_positions),
-              EARLY_MOVER_MAX_RANK, EARLY_MOVER_MIN_RESOLVED, EARLY_MOVER_MIN_WIN_RATE_PCT)
+              EARLY_MOVER_MAX_RANK, EARLY_MOVER_MIN_RESOLVED)
 
     signals = compute_consensus(qualifying_positions, threshold=MIN_EARLY_MOVERS)
 
