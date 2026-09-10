@@ -343,15 +343,41 @@ def run_elite_movers(data):
             end_date=move.get("end_date", ""), cur_price=move.get("cur_price", 0.0),
         )
 
-        # TRADE ELIGIBILITY: previously gated behind wallet_tracker's
-        # conviction/track-record filter (proven win rate + in-pattern bet
-        # size) before ever reaching a trade decision. Removed at Levi's
-        # request (2026-09-08) — that filter was silently absorbing every
-        # elite move before it could generate a live approval prompt, so
-        # elite moves now get the same Approve/Reject treatment as
-        # consensus and early-mover signals: his own tap is the filter.
+        # TRADE ELIGIBILITY, split by mode (2026-09-10, Levi's request) —
+        # same split as consensus/early movers:
+        # LIVE: no gate here — every elite move still gets an
+        # Approve/Reject prompt regardless of the wallet's category
+        # record; his own tap is the filter, same as before. This
+        # deliberately does NOT reintroduce the pre-2026-09-08 bug where a
+        # filter here silently absorbed moves before a live prompt could
+        # ever fire.
+        # PAPER: gated on this wallet's OWN record in THIS SPECIFIC
+        # category — category win rate must be strictly above 50% and
+        # category ROI must be positive, both requiring at least one
+        # resolved category position (never guess "probably fine" from no
+        # data). This replaces the old passes_elite_trade_filter() check
+        # (conviction + streak + rank thresholds), which stays available
+        # in wallet_tracker.py but is no longer called from here.
         if PAPER_MODE:
-            execute_trade(signal, signal_type="elite_mover")
+            cat_record = wallet_tracker.get_wallet_category_record(move["wallet"], move["category"])
+            cat_roi = wallet_tracker.get_wallet_category_roi(move["wallet"], move["category"])
+            win_rate_ok = cat_record["win_rate_pct"] is not None and cat_record["win_rate_pct"] > 50.0
+            roi_ok = cat_roi["roi_pct"] is not None and cat_roi["roi_pct"] > 0
+            if win_rate_ok and roi_ok:
+                execute_trade(signal, signal_type="elite_mover")
+            else:
+                reasons = []
+                if not win_rate_ok:
+                    reasons.append(
+                        f"{move['category']} win rate {cat_record['win_rate_pct']}% "
+                        f"(need >50%, {cat_record['total_resolved']} resolved)"
+                    )
+                if not roi_ok:
+                    reasons.append(
+                        f"{move['category']} ROI {cat_roi['roi_pct']}% "
+                        f"(need positive, {cat_roi['resolved_count']} resolved)"
+                    )
+                log.info("  -> not paper-trading: %s", "; ".join(reasons))
         else:
             request_live_trade(signal, signal_type="elite_mover")
 

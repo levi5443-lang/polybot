@@ -504,6 +504,39 @@ def get_wallet_realized_roi(wallet: str) -> dict:
     }
 
 
+def get_wallet_category_roi(wallet: str, category: str) -> dict:
+    """Same dollar-weighted ROI% math as get_wallet_realized_roi() above,
+    but scoped to one category only instead of all categories combined —
+    added 2026-09-10 for the elite-mover paper-trade eligibility gate,
+    which judges a wallet by its record in the specific category the
+    signal is in, not its all-categories track record.
+
+    Returns {total_invested, total_pnl_usd, roi_pct, resolved_count}.
+    roi_pct is None if the wallet has no resolved positions in this
+    category yet — same "don't guess" behavior as the overall version."""
+    records = _load_records()
+    resolved = [
+        r for r in records.values()
+        if r["wallet"] == wallet and r["category"] == category
+        and r["status"] == "closed" and r.get("realized_pnl_usd") is not None
+    ]
+
+    total_invested = sum(r["size_usd"] for r in resolved)
+    total_pnl = sum(r["realized_pnl_usd"] for r in resolved)
+    resolved_count = len(resolved)
+
+    roi_pct = None
+    if resolved_count >= 1 and total_invested > 0:
+        roi_pct = round(100 * total_pnl / total_invested, 1)
+
+    return {
+        "total_invested": round(total_invested, 2),
+        "total_pnl_usd": round(total_pnl, 2),
+        "roi_pct": roi_pct,
+        "resolved_count": resolved_count,
+    }
+
+
 def format_average_roi(wallets: list[str]) -> str:
     """Display-friendly average ROI% across a group of wallets — shown
     directly in Telegram alerts, distinct from average_roi_is_positive
