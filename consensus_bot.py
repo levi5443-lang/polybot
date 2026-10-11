@@ -37,7 +37,19 @@ APPROVAL_POLL_SECONDS = 15    # how often to check Telegram for a button tap/com
                                # (2026-09-08, Levi's request: taps were taking up to
                                # POLL_INTERVAL_SECONDS, in practice ~11-12 minutes, to
                                # register because they were only checked once per full scan)
-PAPER_MODE = False
+
+# PAPER_MODE removed 2026-10-11 (Levi's request) — paper and live trades now
+# both always run for every signal, unconditionally. Previously this flag
+# picked ONE of execute_trade() (paper, logged under the gates below, no
+# money) or request_live_trade() (live, Approve/Reject prompt, real money)
+# per signal — meaning with the flag left on False, paper trades never got
+# logged at all, which is what broke the accuracy-tracking measurement he
+# wanted. Now every signal that fires always does both: it's evaluated
+# against the paper-trade gates and logged (or skipped, with a reason) as a
+# background/shadow trade with no wallet involved, AND it always goes out
+# as a live Approve/Reject prompt. The two are independent and don't gate
+# each other — a signal can log as a paper trade whether or not you ever
+# tap Approve on its live prompt, and vice versa.
 
 # Only alert on these categories. Empty list = no filter (alert on everything).
 CATEGORY_FILTER: list[str] = []
@@ -47,10 +59,9 @@ _alerted_early_mover_keys: set[tuple] = set()
 
 
 def execute_trade(signal, signal_type="consensus"):
-    """PAPER MODE ONLY. Live signals never call this — see
-    request_live_trade() below, which routes them through
-    trade_approval.py's Telegram approve/reject flow instead, since real
-    money should never move without your explicit tap.
+    """Logs a background/shadow trade — no wallet, no real money. Called
+    for every signal alongside request_live_trade() below (added
+    2026-10-11); the two no longer gate each other.
 
     signal_type identifies WHICH kind of signal produced this trade
     ('consensus', 'early_mover', 'elite_mover') — passed through to the
@@ -76,9 +87,11 @@ def execute_trade(signal, signal_type="consensus"):
 
 
 def request_live_trade(signal, signal_type="consensus"):
-    """LIVE MODE ONLY. Asks for approval via Telegram instead of trading
-    immediately — see trade_approval.py for the actual approve/reject
-    handling, which happens on a later cycle once you respond.
+    """Asks for approval via Telegram before trading real money — see
+    trade_approval.py for the actual approve/reject handling, which
+    happens on a later cycle once you respond. Called for every signal
+    alongside execute_trade() above (added 2026-10-11); the two no
+    longer gate each other.
 
     signal_type is carried through to the pending-approval record so
     that, if approved, the trade gets logged with the right signal_type
@@ -117,9 +130,8 @@ def run_once():
     log.info("Pulled %d candidate wallets, found %d categories.",
               len(data["wallets"]), num_categories)
 
-    if not PAPER_MODE:
-        import trade_approval
-        trade_approval.process_pending_approvals()
+    import trade_approval
+    trade_approval.process_pending_approvals()
 
     run_regular_consensus(data)
     run_early_movers(data)
@@ -202,29 +214,28 @@ def run_regular_consensus(data):
         else:
             log.info("(already alerted — skipping duplicate ping)")
 
-        # TRADE ELIGIBILITY: split by mode, per Levi's request (2026-09-08).
-        # LIVE trades: no gate here — every signal that clears the
-        # category consensus threshold above gets an Approve/Reject
-        # prompt regardless of momentum or ROI; his own tap is the filter
-        # here, matching early movers and elite movers.
-        # PAPER trades: DO gate — only logged as a paper trade (for
-        # accuracy tracking) if momentum is 'steady' or 'growing' AND the
-        # agreeing wallets' average realized ROI is positive. The
-        # Telegram alert message itself always shows momentum/ROI either
-        # way (see momentum_str/average_roi_str above) — this only
-        # controls whether a paper trade gets recorded.
-        if PAPER_MODE:
-            momentum_ok = momentum["trend"] in ("steady", "growing")
-            roi_ok, roi_reason = wallet_tracker.average_roi_is_positive(signal.agreeing_wallets)
-            if momentum_ok and roi_ok:
-                execute_trade(signal, signal_type="consensus")
-            elif not momentum_ok:
-                log.info("  -> not paper-trading: momentum is '%s' (needs steady or growing)",
-                          momentum["trend"])
-            else:
-                log.info("  -> not paper-trading: %s", roi_reason)
+        # TRADE ELIGIBILITY (2026-10-11, Levi's request: both paper and
+        # live always run, unconditionally, for every signal):
+        # PAPER (background/shadow, no wallet): gated — only logged if
+        # momentum is 'steady' or 'growing' AND the agreeing wallets'
+        # average realized ROI is positive. The Telegram alert message
+        # itself always shows momentum/ROI either way (see
+        # momentum_str/average_roi_str above) — this only controls
+        # whether a paper trade gets recorded.
+        momentum_ok = momentum["trend"] in ("steady", "growing")
+        roi_ok, roi_reason = wallet_tracker.average_roi_is_positive(signal.agreeing_wallets)
+        if momentum_ok and roi_ok:
+            execute_trade(signal, signal_type="consensus")
+        elif not momentum_ok:
+            log.info("  -> not paper-trading: momentum is '%s' (needs steady or growing)",
+                      momentum["trend"])
         else:
-            request_live_trade(signal, signal_type="consensus")
+            log.info("  -> not paper-trading: %s", roi_reason)
+
+        # LIVE: no gate here — every signal that clears the category
+        # consensus threshold above still gets an Approve/Reject prompt
+        # regardless of momentum or ROI; your own tap is the filter.
+        request_live_trade(signal, signal_type="consensus")
 
 
 def run_early_movers(data):
@@ -269,27 +280,27 @@ def run_early_movers(data):
             ))
             _alerted_early_mover_keys.add(key)
 
-            # TRADE ELIGIBILITY, per Levi's request (2026-09-08):
-            # LIVE: no extra gate here — the wallet quality filter already
-            # applied in find_early_movers() (top-20 rank, 5+ resolved,
-            # >66% win rate) is enough; every signal that clears it gets
-            # an Approve/Reject prompt.
-            # PAPER: additionally requires every agreeing wallet to have
-            # its last 2 resolved picks (overall) both correct, AND the
-            # group's average realized ROI to be positive — a stricter
-            # bar than live, since paper trades are what builds the
-            # accuracy track record.
-            if PAPER_MODE:
-                streak_ok, streak_reason = wallet_tracker.all_wallets_have_recent_streak(
-                    signal.agreeing_wallets, n=2
-                )
-                roi_ok, roi_reason = wallet_tracker.average_roi_is_positive(signal.agreeing_wallets)
-                if streak_ok and roi_ok:
-                    execute_trade(signal, signal_type="early_mover")
-                else:
-                    log.info("  -> not paper-trading: %s", streak_reason if not streak_ok else roi_reason)
+            # TRADE ELIGIBILITY (2026-10-11, Levi's request: both paper
+            # and live always run, unconditionally, for every signal):
+            # PAPER (background/shadow, no wallet): requires every
+            # agreeing wallet to have its last 2 resolved picks (overall)
+            # both correct, AND the group's average realized ROI to be
+            # positive — a stricter bar than live, since paper trades are
+            # what builds the accuracy track record.
+            streak_ok, streak_reason = wallet_tracker.all_wallets_have_recent_streak(
+                signal.agreeing_wallets, n=2
+            )
+            roi_ok, roi_reason = wallet_tracker.average_roi_is_positive(signal.agreeing_wallets)
+            if streak_ok and roi_ok:
+                execute_trade(signal, signal_type="early_mover")
             else:
-                request_live_trade(signal, signal_type="early_mover")
+                log.info("  -> not paper-trading: %s", streak_reason if not streak_ok else roi_reason)
+
+            # LIVE: no extra gate here — the wallet quality filter already
+            # applied in find_early_movers() (top-20 rank, 5+ resolved) is
+            # enough; every signal that clears it still gets an
+            # Approve/Reject prompt.
+            request_live_trade(signal, signal_type="early_mover")
         else:
             log.info("(already alerted — skipping duplicate ping)")
 
@@ -343,43 +354,44 @@ def run_elite_movers(data):
             end_date=move.get("end_date", ""), cur_price=move.get("cur_price", 0.0),
         )
 
-        # TRADE ELIGIBILITY, split by mode (2026-09-10, Levi's request) —
-        # same split as consensus/early movers:
+        # TRADE ELIGIBILITY (2026-10-11, Levi's request: both paper and
+        # live always run, unconditionally, for every signal — same
+        # change as consensus/early movers above):
+        # PAPER (background/shadow, no wallet): gated on this wallet's
+        # OWN record in THIS SPECIFIC category — category win rate must
+        # be strictly above 50% and category ROI must be positive, both
+        # requiring at least one resolved category position (never guess
+        # "probably fine" from no data). This replaces the old
+        # passes_elite_trade_filter() check (conviction + streak + rank
+        # thresholds), which stays available in wallet_tracker.py but is
+        # no longer called from here.
+        cat_record = wallet_tracker.get_wallet_category_record(move["wallet"], move["category"])
+        cat_roi = wallet_tracker.get_wallet_category_roi(move["wallet"], move["category"])
+        win_rate_ok = cat_record["win_rate_pct"] is not None and cat_record["win_rate_pct"] > 50.0
+        roi_ok = cat_roi["roi_pct"] is not None and cat_roi["roi_pct"] > 0
+        if win_rate_ok and roi_ok:
+            execute_trade(signal, signal_type="elite_mover")
+        else:
+            reasons = []
+            if not win_rate_ok:
+                reasons.append(
+                    f"{move['category']} win rate {cat_record['win_rate_pct']}% "
+                    f"(need >50%, {cat_record['total_resolved']} resolved)"
+                )
+            if not roi_ok:
+                reasons.append(
+                    f"{move['category']} ROI {cat_roi['roi_pct']}% "
+                    f"(need positive, {cat_roi['resolved_count']} resolved)"
+                )
+            log.info("  -> not paper-trading: %s", "; ".join(reasons))
+
         # LIVE: no gate here — every elite move still gets an
         # Approve/Reject prompt regardless of the wallet's category
-        # record; his own tap is the filter, same as before. This
+        # record; your own tap is the filter, same as before. This
         # deliberately does NOT reintroduce the pre-2026-09-08 bug where a
         # filter here silently absorbed moves before a live prompt could
         # ever fire.
-        # PAPER: gated on this wallet's OWN record in THIS SPECIFIC
-        # category — category win rate must be strictly above 50% and
-        # category ROI must be positive, both requiring at least one
-        # resolved category position (never guess "probably fine" from no
-        # data). This replaces the old passes_elite_trade_filter() check
-        # (conviction + streak + rank thresholds), which stays available
-        # in wallet_tracker.py but is no longer called from here.
-        if PAPER_MODE:
-            cat_record = wallet_tracker.get_wallet_category_record(move["wallet"], move["category"])
-            cat_roi = wallet_tracker.get_wallet_category_roi(move["wallet"], move["category"])
-            win_rate_ok = cat_record["win_rate_pct"] is not None and cat_record["win_rate_pct"] > 50.0
-            roi_ok = cat_roi["roi_pct"] is not None and cat_roi["roi_pct"] > 0
-            if win_rate_ok and roi_ok:
-                execute_trade(signal, signal_type="elite_mover")
-            else:
-                reasons = []
-                if not win_rate_ok:
-                    reasons.append(
-                        f"{move['category']} win rate {cat_record['win_rate_pct']}% "
-                        f"(need >50%, {cat_record['total_resolved']} resolved)"
-                    )
-                if not roi_ok:
-                    reasons.append(
-                        f"{move['category']} ROI {cat_roi['roi_pct']}% "
-                        f"(need positive, {cat_roi['resolved_count']} resolved)"
-                    )
-                log.info("  -> not paper-trading: %s", "; ".join(reasons))
-        else:
-            request_live_trade(signal, signal_type="elite_mover")
+        request_live_trade(signal, signal_type="elite_mover")
 
 
 def run_forever():
@@ -401,9 +413,9 @@ def run_forever():
     import shared_storage
     shared_storage.migrate_legacy_local_data()
 
-    log.info("Starting consensus bot. PAPER_MODE=%s, category_threshold=%d, "
+    log.info("Starting consensus bot. paper+live always on, category_threshold=%d, "
               "full scan every %ds, approval checks every %ds, period=%s",
-              PAPER_MODE, CATEGORY_CONSENSUS_THRESHOLD, POLL_INTERVAL_SECONDS,
+              CATEGORY_CONSENSUS_THRESHOLD, POLL_INTERVAL_SECONDS,
               APPROVAL_POLL_SECONDS, LEADERBOARD_PERIOD)
 
     last_full_scan = 0.0
@@ -412,7 +424,7 @@ def run_forever():
         if now - last_full_scan >= POLL_INTERVAL_SECONDS:
             run_once()  # already checks approvals itself, near the start
             last_full_scan = time.time()
-        elif not PAPER_MODE:
+        else:
             import trade_approval
             trade_approval.process_pending_approvals()
         time.sleep(APPROVAL_POLL_SECONDS)
