@@ -57,7 +57,11 @@ import wallet_tracker
 log = logging.getLogger("early_movers")
 
 MIN_EARLY_MOVERS = 1  # changed to 1 (the actual final value) 2026-09-08. See note above.
-NEWEST_EVENTS_TO_CHECK = 100  # how many of Polymarket's newest events to look at each cycle
+NEWEST_EVENTS_TO_CHECK = 500  # raised from 100 to 500 (2026-10-12, Levi's request) — cycles were
+                               # regularly seeing 200-450+ brand-new markets per pass, so the old
+                               # cap of 100 meant a real chunk of "new" markets were never even
+                               # looked at for early movers. 500 gives headroom above the highest
+                               # single-cycle count observed so far (459).
 NEW_MARKET_MAX_AGE_MINUTES = 1440  # raised from 60 to 1440 (24h) at Levi's request (2026-09-10) —
                                     # widens the "brand-new market" window to a full day
 
