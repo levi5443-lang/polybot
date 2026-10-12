@@ -31,7 +31,8 @@ import wallet_tracker
 
 log = logging.getLogger("category_leaderboard")
 
-CANDIDATE_POOL_SIZE = 100   # how many wallets to pull from the global leaderboard first
+CANDIDATE_POOL_SIZE = 100   # target size of the candidate pool (see _pull_merged_candidate_pool —
+                            # a single fetch_leaderboard() call can't actually reach this alone)
 TOP_N_PER_CATEGORY = 10     # how many top wallets count as "the leaderboard" within a category
 
 # Categories to skip entirely — no leaderboard is built for these, no
@@ -41,6 +42,53 @@ EXCLUDED_CATEGORIES = ["Crypto"]
 
 # Threshold for a category-level consensus signal (out of TOP_N_PER_CATEGORY).
 CATEGORY_CONSENSUS_THRESHOLD = 4
+
+# MERGE_PERIODS (added 2026-10-12, Levi's request): confirmed that
+# fetch_leaderboard() only ever returns ~50 wallets per call no matter what
+# limit is passed — Polymarket's /v1/leaderboard endpoint caps a single
+# request's response at 50, regardless of the requested limit. Asking for
+# CANDIDATE_POOL_SIZE=100 in one call was therefore silently capped at 50
+# the whole time. Rather than rely on an undocumented offset/pagination
+# param (unconfirmed against current Polymarket API docs), this instead
+# merges several DIFFERENT leaderboard periods and de-duplicates by wallet
+# address — "30d" is the stable, established ranking; "7d" and "1d" surface
+# wallets who are hot right now but haven't accumulated enough 30-day
+# volume to show up there yet. Order matters: earlier periods in this list
+# win ties when building the merged, order-preserving candidate list.
+MERGE_PERIODS = ["30d", "7d", "1d"]
+
+
+def _pull_merged_candidate_pool(primary_period: str) -> list[str]:
+    """Builds the candidate pool by pulling every period in MERGE_PERIODS
+    (plus primary_period, if it's some other value a caller passed in) and
+    merging unique wallets, preserving first-seen order. This is the
+    workaround for the 50-wallet-per-call cap described above — one period
+    alone tops out at 50 wallets; merging a few distinct periods gets us a
+    meaningfully larger, still-legitimate pool, capped at
+    CANDIDATE_POOL_SIZE total.
+    """
+    periods = list(dict.fromkeys([primary_period] + MERGE_PERIODS))
+
+    merged: list[str] = []
+    seen: set = set()
+    for period in periods:
+        try:
+            batch = fetch_leaderboard(period=period, limit=CANDIDATE_POOL_SIZE)
+        except Exception as e:
+            log.warning("Failed to fetch '%s' leaderboard: %s", period, e)
+            continue
+        new_this_period = 0
+        for wallet in batch:
+            if wallet not in seen:
+                seen.add(wallet)
+                merged.append(wallet)
+                new_this_period += 1
+        log.info("  ...leaderboard period '%s': %d wallet(s), %d new to the pool",
+                  period, len(batch), new_this_period)
+        if len(merged) >= CANDIDATE_POOL_SIZE:
+            break
+
+    return merged[:CANDIDATE_POOL_SIZE]
 
 
 def build_category_data(period: str = "30d") -> dict:
@@ -59,8 +107,9 @@ def build_category_data(period: str = "30d") -> dict:
       - category_top_wallets: {category: [wallet, ...]} (top N per category,
         excluding anything in EXCLUDED_CATEGORIES)
     """
-    wallets = fetch_leaderboard(period=period, limit=CANDIDATE_POOL_SIZE)
-    log.info("Got %d candidate wallets. Fetching positions (this is the slow part)...", len(wallets))
+    wallets = _pull_merged_candidate_pool(period)
+    log.info("Got %d candidate wallets (merged across %s). Fetching positions (this is the slow part)...",
+              len(wallets), list(dict.fromkeys([period] + MERGE_PERIODS)))
 
     all_positions = []
     for i, wallet in enumerate(wallets, start=1):
