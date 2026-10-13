@@ -465,6 +465,38 @@ def get_price_changes(wallets: list[str], market_id: str, outcome: str, current_
     return changes
 
 
+def get_position_age_minutes(wallet: str, market_id: str, outcome: str) -> float | None:
+    """Numeric twin of get_position_ages() above (added 2026-10-13, for
+    early_movers.py's price-based redefinition of "early" — see that
+    module's docstring) — same first_seen_at lookup, but returns raw
+    minutes instead of a display string, so callers can threshold on it.
+    Returns None if we have no record of this wallet ever entering this
+    exact position (never seen it, or missing first_seen_at)."""
+    records = _load_records()
+    rec = records.get(_record_key(wallet, market_id, outcome))
+    if not rec or not rec.get("first_seen_at"):
+        return None
+    try:
+        seen = datetime.fromisoformat(rec["first_seen_at"])
+    except (ValueError, TypeError):
+        return None
+    return (datetime.now(timezone.utc) - seen).total_seconds() / 60
+
+
+def get_price_change_pts(wallet: str, market_id: str, outcome: str, current_price: float) -> float | None:
+    """Numeric twin of get_price_changes() above (added 2026-10-13, same
+    reason as get_position_age_minutes) — returns the raw percentage-point
+    move since this one wallet's entry (positive = price moved toward
+    this outcome since they got in), or None if we lack a valid entry
+    price or current price to compare against."""
+    records = _load_records()
+    rec = records.get(_record_key(wallet, market_id, outcome))
+    entry_price = rec.get("entry_price") if rec else None
+    if not entry_price or entry_price <= 0 or not current_price:
+        return None
+    return (current_price - entry_price) * 100
+
+
 def get_wallet_realized_roi(wallet: str) -> dict:
     """Dollar-weighted realized ROI% across ALL of a wallet's resolved
     positions, in every category combined — not a naive average of each

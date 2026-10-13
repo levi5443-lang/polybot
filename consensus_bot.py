@@ -239,7 +239,10 @@ def run_regular_consensus(data):
 
 
 def run_early_movers(data):
-    signals = find_early_movers(data["all_positions"], data["category_map"], data["wallet_overall_rank"])
+    # wallet_overall_rank no longer passed in (2026-10-13) — find_early_movers()
+    # now gates on resolved-count + price action (see early_movers.py docstring),
+    # not leaderboard rank.
+    signals = find_early_movers(data["all_positions"], data["category_map"])
     if not signals:
         log.info("No early-mover signals this pass (threshold=%d).", MIN_EARLY_MOVERS)
         return
@@ -296,10 +299,11 @@ def run_early_movers(data):
             else:
                 log.info("  -> not paper-trading: %s", streak_reason if not streak_ok else roi_reason)
 
-            # LIVE: no extra gate here — the wallet quality filter already
-            # applied in find_early_movers() (top-20 rank, 5+ resolved) is
-            # enough; every signal that clears it still gets an
-            # Approve/Reject prompt.
+            # LIVE: no extra gate here — the wallet quality + price-action
+            # filter already applied in find_early_movers() (5+ resolved,
+            # recent entry, meaningful favorable price move, still inside
+            # the price band) is enough; every signal that clears it still
+            # gets an Approve/Reject prompt.
             request_live_trade(signal, signal_type="early_mover")
         else:
             log.info("(already alerted — skipping duplicate ping)")
