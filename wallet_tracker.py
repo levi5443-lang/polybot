@@ -614,6 +614,49 @@ def average_roi_is_positive(wallets: list[str]) -> tuple[bool, str]:
     return True, f"average ROI across {len(wallets)} wallet(s) is +{avg_roi:.1f}%"
 
 
+def rank_wallets_by_category_roi(wallets: list[str], category: str) -> list[str]:
+    """Category-scoped twin of rank_wallets_by_realized_roi() below —
+    added 2026-10-13 (Levi's request) to fix a real gap: category
+    leaderboards (category_leaderboard.py's category_top_wallets, which
+    is what actually determines who counts toward a Consensus signal)
+    were being ranked purely by $ size committed to the category, never
+    by whether those wallets are actually GOOD in it specifically. This
+    ranks by each wallet's category-specific realized ROI% instead
+    (get_wallet_category_roi), with the same MIN_SAMPLE_SIZE-resolved-
+    positions-in-THIS-category gate before trusting the number enough to
+    rank by it. Below that, a wallet keeps its original relative order —
+    i.e. still size-ranked, since callers pass candidates in size order —
+    and is appended after everyone with a proven category record.
+    Unproven wallets are never penalized, just not yet promoted ahead of
+    someone with an established track record in this specific category."""
+    confident = []
+    unproven = []
+    for w in wallets:
+        roi = get_wallet_category_roi(w, category)
+        if roi["roi_pct"] is not None and roi["resolved_count"] >= MIN_SAMPLE_SIZE:
+            confident.append((w, roi["roi_pct"]))
+        else:
+            unproven.append(w)
+
+    confident.sort(key=lambda pair: pair[1], reverse=True)
+    return [w for w, _ in confident] + unproven
+
+
+def get_average_roi_pct(wallets: list[str]) -> float | None:
+    """Numeric twin of format_average_roi() above — added 2026-10-13 so a
+    trade's execute_trade() call (consensus_bot.py) can log the agreeing
+    wallets' average ROI% alongside the trade itself as plain data, not
+    just render it into a Telegram string. Returns the average ROI%
+    across whichever wallets have at least one resolved position
+    (skipping ones with no data, same as the display version), or None
+    if none of them have any resolved history at all."""
+    rois = [get_wallet_realized_roi(w)["roi_pct"] for w in wallets]
+    rois = [r for r in rois if r is not None]
+    if not rois:
+        return None
+    return round(sum(rois) / len(rois), 1)
+
+
 def rank_wallets_by_realized_roi(wallets: list[str]) -> list[str]:
     """Reorders a candidate pool by historical realized ROI% instead of
     Polymarket's own profit-rank ordering. A wallet is only ranked by

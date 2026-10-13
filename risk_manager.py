@@ -164,12 +164,21 @@ def has_ever_traded(market_id: str, outcome: str, mode: str = "live") -> bool:
 def record_trade_open(market_id: str, market_question: str, outcome: str,
                        size_usd: float, entry_price: float, category: str,
                        mode: str = "live", signal_type: str = "consensus",
-                       end_date: str = "") -> None:
+                       end_date: str = "", agreement_count: int = None,
+                       avg_wallet_roi_pct: float = None) -> None:
     """mode is 'live' (real money) or 'paper' (tracked for accuracy only,
     no money moved). signal_type is 'consensus' or 'early_mover' — lets
     accuracy be broken down by which kind of signal produced the trade.
     end_date is Polymarket's own expected-resolution date for the market,
-    carried through so /positions can show when a decision is expected."""
+    carried through so /positions can show when a decision is expected.
+
+    agreement_count/avg_wallet_roi_pct (added 2026-10-13, Levi's request):
+    pure instrumentation, optional, default None — captures how strong the
+    signal looked AT THE MOMENT it was traded (how many wallets agreed,
+    what their average realized ROI was). Doesn't change any trading
+    behavior by itself; it's what makes it possible to later ask, from
+    real resolved data, whether e.g. 6-of-10 agreement actually
+    outperforms the 4-of-10 floor, instead of guessing."""
     trades = _load_trade_log()
     trades.append({
         "market_id": market_id,
@@ -181,6 +190,8 @@ def record_trade_open(market_id: str, market_question: str, outcome: str,
         "mode": mode,
         "signal_type": signal_type,
         "end_date": end_date,
+        "agreement_count": agreement_count,
+        "avg_wallet_roi_pct": avg_wallet_roi_pct,
         "opened_at": datetime.now(timezone.utc).isoformat(),
         "status": "open",
         "realized_pnl": None,

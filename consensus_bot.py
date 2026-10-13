@@ -69,6 +69,7 @@ def execute_trade(signal, signal_type="consensus"):
     by category. Every caller below should pass its own signal_type
     explicitly rather than relying on this default."""
     import risk_manager
+    import wallet_tracker
 
     if risk_manager.has_ever_traded(signal.market_id, signal.outcome, mode="paper"):
         log.info("[PAPER TRADE] Already tracking '%s' [%s] — not re-logging.",
@@ -79,10 +80,18 @@ def execute_trade(signal, signal_type="consensus"):
     # Paper trades are tracked at a fixed notional $1 "unit" — the
     # accuracy math only cares whether the prediction was right, not
     # a dollar amount, since no money actually moves in paper mode.
+    #
+    # agreement_count/avg_wallet_roi_pct (2026-10-13, Levi's request):
+    # recorded here, once, for every signal type that calls execute_trade
+    # — captures how strong the signal looked at the moment it was
+    # traded, so the data exists later to actually test whether agreement
+    # count or wallet quality correlates with outcome, instead of guessing.
     risk_manager.record_trade_open(
         signal.market_id, signal.market_question, signal.outcome,
         size_usd=1.0, entry_price=signal.cur_price, category=signal.category,
-        mode="paper", signal_type=signal_type, end_date=signal.end_date
+        mode="paper", signal_type=signal_type, end_date=signal.end_date,
+        agreement_count=signal.count,
+        avg_wallet_roi_pct=wallet_tracker.get_average_roi_pct(signal.agreeing_wallets),
     )
 
 

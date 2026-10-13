@@ -10,8 +10,10 @@ separate from "top 10 Weather traders," we build it ourselves:
    the global top 20 still gets found.
 2. Pull every candidate's positions.
 3. Tag each position's event with its category.
-4. Within each category, rank candidates by how much they have sized into
-   that category specifically, and keep the top TOP_N_PER_CATEGORY.
+4. Within each category, keep whoever has sized into that category at all,
+   then rank THOSE candidates by their proven category-specific realized
+   ROI% (see rank_wallets_by_category_roi below), keeping the top
+   TOP_N_PER_CATEGORY.
 5. Run consensus checks separately per category, using only that
    category's own top-N wallets — not the same global list for everything.
 
@@ -42,6 +44,16 @@ EXCLUDED_CATEGORIES = ["Crypto"]
 
 # Threshold for a category-level consensus signal (out of TOP_N_PER_CATEGORY).
 CATEGORY_CONSENSUS_THRESHOLD = 4
+
+# CONSENSUS_PRICE_BAND (added 2026-10-13, Levi's request): a Consensus
+# signal only counts if the current price is still inside this band.
+# Same reasoning as early_movers.py's own price band — a market already
+# sitting near 0 or 1 has already converged toward that outcome, so even
+# a correct call pays little; there's no real room left to profit from
+# entering now, no matter how many top wallets agree. Matches Early
+# Movers' band for consistency; adjust independently if the data later
+# suggests Consensus should use a different range.
+CONSENSUS_PRICE_BAND = (0.15, 0.85)
 
 # MERGE_PERIODS (added 2026-10-12, Levi's request): confirmed that
 # fetch_leaderboard() only ever returns ~50 wallets per call no matter what
@@ -135,7 +147,9 @@ def build_category_data(period: str = "30d") -> dict:
 
     # Sum each wallet's position size within each category — skipping
     # excluded categories entirely, so they never form a leaderboard and
-    # never produce a signal.
+    # never produce a signal. This $ size is now ONLY used to decide who's
+    # even a candidate for a category's leaderboard (i.e. has real skin in
+    # it) — see category_top_wallets below for how the actual ranking works.
     wallet_category_size: dict = defaultdict(lambda: defaultdict(float))
     for p in all_positions:
         cat = category_map.get(p.event_id, "Uncategorized")
@@ -149,10 +163,25 @@ def build_category_data(period: str = "30d") -> dict:
         for cat, size in cats.items():
             category_candidates[cat].append((wallet, size))
 
+    # RANKING CHANGE (2026-10-13, Levi's request): a category's top N used
+    # to be whoever had the most $ sized into that category — a whale with
+    # a mediocre track record counted the same as a smaller but genuinely
+    # good trader, as long as they'd put enough money in. Now: $ size still
+    # decides who's even a CANDIDATE (you need real skin in the category to
+    # count at all), but the actual top-N ranking is by each wallet's own
+    # category-specific realized ROI% (wallet_tracker.rank_wallets_by_category_roi),
+    # once they have enough resolved history in that category to trust the
+    # number (same MIN_SAMPLE_SIZE gate used everywhere else in this
+    # codebase). Wallets without enough category history yet fall back to
+    # size order (the order they're passed in) and are appended after
+    # everyone with a proven record — never penalized, just not yet
+    # promoted ahead of someone proven.
     category_top_wallets = {}
     for cat, candidates in category_candidates.items():
-        candidates.sort(key=lambda x: x[1], reverse=True)
-        category_top_wallets[cat] = [w for w, _ in candidates[:TOP_N_PER_CATEGORY]]
+        candidates.sort(key=lambda x: x[1], reverse=True)  # size order = the fallback ordering
+        candidate_wallets = [w for w, _ in candidates]
+        ranked = wallet_tracker.rank_wallets_by_category_roi(candidate_wallets, cat)
+        category_top_wallets[cat] = ranked[:TOP_N_PER_CATEGORY]
 
     # "wallets" (Polymarket's own profit-ranked list) is still how we
     # DISCOVER candidates in the first place — there's no public API to
@@ -181,7 +210,9 @@ def compute_category_consensus(data: dict, threshold: int = CATEGORY_CONSENSUS_T
 
     Returns a flat list of ConsensusSignal, each already labeled with its
     category and counted against that category's own wallet list (not the
-    global pool).
+    global pool). Signals whose current price has already moved outside
+    CONSENSUS_PRICE_BAND are dropped (2026-10-13, Levi's request) — see
+    that constant's own comment for why.
     """
     import signal_momentum
 
@@ -203,6 +234,17 @@ def compute_category_consensus(data: dict, threshold: int = CATEGORY_CONSENSUS_T
             signal_momentum.record_and_get_momentum(s.market_id, s.outcome, s.count)
 
         cat_signals = compute_consensus(cat_positions, threshold=threshold)
+
+        before_band = len(cat_signals)
+        cat_signals = [
+            s for s in cat_signals
+            if CONSENSUS_PRICE_BAND[0] <= s.cur_price <= CONSENSUS_PRICE_BAND[1]
+        ]
+        if before_band != len(cat_signals):
+            log.info("  [%s] price-band filter: %d/%d signal(s) kept (%.0f-%.0f%% band)",
+                      cat, len(cat_signals), before_band,
+                      CONSENSUS_PRICE_BAND[0] * 100, CONSENSUS_PRICE_BAND[1] * 100)
+
         for s in cat_signals:
             s.category = cat  # already implied by construction, but explicit beats implicit
         signals.extend(cat_signals)
