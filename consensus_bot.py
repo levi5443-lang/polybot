@@ -367,36 +367,30 @@ def run_elite_movers(data):
             end_date=move.get("end_date", ""), cur_price=move.get("cur_price", 0.0),
         )
 
-        # TRADE ELIGIBILITY (2026-10-11, Levi's request: both paper and
-        # live always run, unconditionally, for every signal — same
-        # change as consensus/early movers above):
-        # PAPER (background/shadow, no wallet): gated on this wallet's
-        # OWN record in THIS SPECIFIC category — category win rate must
-        # be strictly above 50% and category ROI must be positive, both
-        # requiring at least one resolved category position (never guess
-        # "probably fine" from no data). This replaces the old
-        # passes_elite_trade_filter() check (conviction + streak + rank
-        # thresholds), which stays available in wallet_tracker.py but is
-        # no longer called from here.
-        cat_record = wallet_tracker.get_wallet_category_record(move["wallet"], move["category"])
-        cat_roi = wallet_tracker.get_wallet_category_roi(move["wallet"], move["category"])
-        win_rate_ok = cat_record["win_rate_pct"] is not None and cat_record["win_rate_pct"] > 50.0
-        roi_ok = cat_roi["roi_pct"] is not None and cat_roi["roi_pct"] > 0
-        if win_rate_ok and roi_ok:
+        # TRADE ELIGIBILITY (2026-10-13, Levi's request — RESTORED):
+        # PAPER (background/shadow, no wallet): back to
+        # wallet_tracker.passes_elite_trade_filter() — category win rate
+        # strictly above 66% (not just 50%), 2+ resolved category picks
+        # minimum, the wallet's last 2 category picks BOTH correct (not
+        # just a decent aggregate average), and a conviction-consistency
+        # check (this bet isn't wildly oversized vs. the wallet's own
+        # normal pattern, which would look more like tilt than genuine
+        # extra confidence). This replaces the 2026-10-11 version, which
+        # only required a >50% win rate with as little as ONE resolved
+        # category pick to pass — functionally close to a coin flip on a
+        # single data point. Elite Mover trades on ONE wallet's say-so
+        # with no corroboration from other traders, unlike consensus —
+        # which is exactly why the quality gate matters more here, not
+        # less. passes_elite_trade_filter() was already built for this
+        # and simply wasn't being called; restoring it rather than
+        # reinventing it.
+        passed, reason = wallet_tracker.passes_elite_trade_filter(
+            move["wallet"], move["category"], move["size_usd"], move["market_id"], move["outcome"]
+        )
+        if passed:
             execute_trade(signal, signal_type="elite_mover")
         else:
-            reasons = []
-            if not win_rate_ok:
-                reasons.append(
-                    f"{move['category']} win rate {cat_record['win_rate_pct']}% "
-                    f"(need >50%, {cat_record['total_resolved']} resolved)"
-                )
-            if not roi_ok:
-                reasons.append(
-                    f"{move['category']} ROI {cat_roi['roi_pct']}% "
-                    f"(need positive, {cat_roi['resolved_count']} resolved)"
-                )
-            log.info("  -> not paper-trading: %s", "; ".join(reasons))
+            log.info("  -> not paper-trading: %s", reason)
 
         # LIVE: no gate here — every elite move still gets an
         # Approve/Reject prompt regardless of the wallet's category
