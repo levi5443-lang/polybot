@@ -14,6 +14,24 @@ blocked new live trades once today's realized losses hit $100 — removed
 at Levi's request (2026-09-08). The only remaining per-trade risk controls
 are position sizing and the total exposure cap below.
 
+BASIS CONFIRMED (2026-10-13, Levi's explicit answer): both
+POSITION_SIZE_PCT and TOTAL_EXPOSURE_CAP_PCT are measured against
+TRADABLE CASH ONLY, not total account equity including open positions.
+The 2% figure is the full dollar amount at risk on a trade, not sizing
+built around a planned stop-loss.
+
+POLYBOT EXPOSURE NOTE (2026-10-13): get_current_live_exposure_usd() below
+sums size_usd across OUR OWN local ledger of trades THIS bot has placed.
+That's correct for execution.py's self-custodied path, where this ledger
+is the only record there is. For the Polybot-backed path
+(polybot_execution.py), this is NOT enough on its own — the Polybot
+account may hold positions/reservations this bot never placed (the
+account had ~$62.82 in positions before this integration existed), so
+compute_trade_size_usd() below now accepts an optional
+current_exposure_usd override; trade_approval.py passes Polybot's own
+live committed figure (positionsValue + reservedUsdTotal) when using
+that backend, rather than relying on this local ledger alone.
+
 IMPORTANT: this module's math is fully unit-testable and IS tested. What is
 NOT tested (because it can't be, without a funded live wallet) is whether
 the actual order placement in execution.py behaves as documented against
@@ -25,8 +43,8 @@ from datetime import datetime, timezone
 
 log = logging.getLogger("risk_manager")
 
-POSITION_SIZE_PCT = 0.02      # 2% of wallet balance per trade
-TOTAL_EXPOSURE_CAP_PCT = 0.26 # never have more than this fraction of the wallet across ALL open live positions combined
+POSITION_SIZE_PCT = 0.02      # 2% of tradable-cash balance per trade — full dollar risk, not stop-loss sizing
+TOTAL_EXPOSURE_CAP_PCT = 0.26 # never have more than this fraction of tradable cash across ALL open live positions combined
 
 # Shared across both services (worker + dashboard) — this is what makes
 # /history and /accuracy on Telegram (served by the dashboard) able to see
@@ -70,16 +88,25 @@ def get_position_size_usd(wallet_balance_usd: float) -> float:
 
 
 def get_current_live_exposure_usd() -> float:
-    """Sum of size_usd across every OPEN, live-mode trade — how much is
-    currently at risk across all live positions combined, right now."""
+    """Sum of size_usd across every OPEN, live-mode trade in OUR OWN local
+    ledger — how much THIS BOT has committed across all live positions it
+    has placed. See the POLYBOT EXPOSURE NOTE in the module docstring for
+    why this alone isn't the right number for the Polybot-backed execution
+    path."""
     trades = _load_trade_log()
     return sum(t["size_usd"] for t in trades if t.get("mode") == "live" and t["status"] == "open")
 
 
-def compute_trade_size_usd(wallet_balance_usd: float) -> float:
+def compute_trade_size_usd(wallet_balance_usd: float, current_exposure_usd: float = None) -> float:
     """The size a new LIVE trade should use: 2% of current balance, but
     never allowed to push total open live exposure past
     TOTAL_EXPOSURE_CAP_PCT of the wallet.
+
+    current_exposure_usd: pass this explicitly to use a real, authoritative
+    exposure figure (e.g. polybot_execution.get_live_committed_usd()) instead
+    of this module's own local ledger — added 2026-10-13 for the Polybot
+    execution path, additive and backward-compatible: omitted, this behaves
+    exactly as before (falls back to get_current_live_exposure_usd()).
 
     Returns 0.0 if the 2% trade wouldn't fit under the cap at all — trades
     are SKIPPED entirely in that case, never silently downsized, so every
@@ -87,7 +114,10 @@ def compute_trade_size_usd(wallet_balance_usd: float) -> float:
     smaller leftover amount that's harder to reason about.
     """
     proposed = get_position_size_usd(wallet_balance_usd)
-    current_exposure = get_current_live_exposure_usd()
+    current_exposure = (
+        current_exposure_usd if current_exposure_usd is not None
+        else get_current_live_exposure_usd()
+    )
     cap_usd = TOTAL_EXPOSURE_CAP_PCT * wallet_balance_usd
 
     if current_exposure + proposed > cap_usd:

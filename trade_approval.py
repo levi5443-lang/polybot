@@ -39,6 +39,15 @@ trade_tracker/risk_manager functions the webhook used to call. Same
 tradeoff as button taps: a command's reply can take up to
 POLL_INTERVAL_SECONDS to arrive, since it's picked up on the worker's next
 cycle rather than instantly.
+
+EXECUTION BACKEND SWAP (2026-10-13, Levi's request): _execute_approved_trade()
+below now calls polybot_execution.py instead of execution.py. execution.py
+(direct CLOB, self-custodied POLYMARKET_PRIVATE_KEY) is untouched and still
+importable, it's just no longer the live path. polybot_execution.py talks
+to Levi's Polybot custodial account instead. Gated behind
+live_execution.is_enabled() (POLYBOT_LIVE_EXECUTION_ENABLED, default False) —
+see live_execution.py. The /wallet command below still works unchanged
+since both backends expose the same get_wallet_status() shape.
 """
 
 import logging
@@ -53,6 +62,7 @@ from telegram_alert import (
 import risk_manager
 import wallet_tracker
 import trade_tracker
+import live_execution
 import os
 
 log = logging.getLogger("trade_approval")
@@ -119,7 +129,15 @@ def request_trade_approval(signal, signal_type: str = "consensus") -> None:
     the pending record so that, if you approve, _execute_approved_trade()
     below can log the trade with the signal type that actually produced
     it — otherwise every live trade would get stamped 'consensus' by
-    default regardless of where it came from."""
+    default regardless of where it came from.
+
+    market_slug/negative_risk/cur_price are now also stored in the
+    pending record (2026-10-13) — Polybot's order endpoints require
+    market_slug + negative_risk on every order, and cur_price is needed
+    as the expected_price. These come straight from the signal (see
+    consensus_logic.py's Position/ConsensusSignal — populated from
+    Polymarket's raw position data) captured at request time, same as
+    everything else already stored here."""
     short_id = uuid.uuid4().hex[:8]
     pending = _load_pending()
     pending[short_id] = {
@@ -130,6 +148,9 @@ def request_trade_approval(signal, signal_type: str = "consensus") -> None:
         "token_id": signal.token_id,
         "end_date": signal.end_date,
         "signal_type": signal_type,
+        "market_slug": getattr(signal, "market_slug", ""),
+        "negative_risk": getattr(signal, "negative_risk", False),
+        "cur_price": getattr(signal, "cur_price", 0.0),
         "requested_at": datetime.now(timezone.utc).isoformat(),
     }
     _save_pending(pending)
@@ -149,7 +170,7 @@ def request_trade_approval(signal, signal_type: str = "consensus") -> None:
         # fresh 26% exposure check) at the moment you actually approve,
         # so this number can differ slightly from what actually executes.
         try:
-            import execution
+            import polybot_execution as execution
             balance = execution.get_wallet_balance_usd()
             preview_size = risk_manager.get_position_size_usd(balance)
             preview_profit = preview_size * (return_pct / 100)
@@ -182,8 +203,12 @@ def _execute_approved_trade(pending_record: dict) -> str:
     when approval was first requested, since balance/exposure can have
     changed since then) and places the order if everything checks out.
     Returns a short human-readable result string for the Telegram reply.
+
+    Backend: polybot_execution.py (Levi's Polybot custodial account),
+    not execution.py — see module docstring. Refuses to place anything
+    unless live_execution.is_enabled(), which defaults to False.
     """
-    import execution  # lazy import — only needed once we're actually trading real money
+    import polybot_execution as execution  # lazy import — only needed once we're actually trading real money
 
     market_id = pending_record["market_id"]
     outcome = pending_record["outcome"]
@@ -204,41 +229,57 @@ def _execute_approved_trade(pending_record: dict) -> str:
     if not token_id:
         return "No token ID available for this market — cannot place a real order."
 
+    if not live_execution.is_enabled():
+        return ("Live execution is currently OFF (POLYBOT_LIVE_EXECUTION_ENABLED=false) "
+                "— no action taken. This is the deliberate kill switch while paper "
+                "trading is still being proven out.")
+
     try:
         balance = execution.get_wallet_balance_usd()
     except Exception as e:
-        log.error("Could not fetch wallet balance: %s", e)
-        return f"Could not check wallet balance ({e}) — no action taken."
-
-    size_usd = risk_manager.compute_trade_size_usd(balance)
-    if size_usd < 1.0:
-        # Includes which wallet address the bot actually checked — added
-        # 2026-09-08 so this is visible right here in Telegram instead of
-        # needing server logs pulled every time. Read-only, never touches
-        # Render's env. See execution.get_wallet_status() for the
-        # proxy-vs-EOA account detection this relies on.
-        status = execution.get_wallet_status()
-        if status["mode"] == "proxy":
-            wallet_desc = f"{status['trading_address']} (proxy; signed by {status['signer_address']})"
-        else:
-            wallet_desc = status.get("trading_address") or "unknown"
-        return (f"Blocked by the 26% total exposure cap (balance ${balance:,.2f} "
-                f"on wallet {wallet_desc}) — no action taken.")
+        log.error("Could not fetch Polybot balance: %s", e)
+        return f"Could not check Polybot balance ({e}) — no action taken."
 
     try:
-        resp = execution.place_market_buy(token_id, size_usd)
+        current_exposure = execution.get_live_committed_usd()
+    except Exception as e:
+        log.error("Could not fetch Polybot live exposure: %s", e)
+        return f"Could not check current exposure ({e}) — no action taken."
+
+    size_usd = risk_manager.compute_trade_size_usd(balance, current_exposure_usd=current_exposure)
+    if size_usd < 1.0:
+        return (f"Blocked by the 26% total exposure cap or insufficient tradable cash "
+                f"(tradable balance ${balance:,.2f}, currently committed ${current_exposure:,.2f}) "
+                f"— no action taken.")
+
+    market_slug = pending_record.get("market_slug", "")
+    if not market_slug:
+        return (f"Missing market_slug for this signal — cannot safely place a real order. "
+                f"(This should always be populated from Polymarket's position data; if "
+                f"you're seeing this, something upstream didn't capture it.)")
+
+    try:
+        resp = execution.place_market_buy(
+            token_id, size_usd,
+            market_slug=market_slug,
+            outcome=outcome,
+            negative_risk=pending_record.get("negative_risk", False),
+            expected_price=pending_record.get("cur_price", 0.0),
+        )
     except Exception as e:
         log.error("Order placement failed: %s", e)
         return f"Order placement failed ({e})."
 
-    entry_price = resp.get("price", 0) if isinstance(resp, dict) else 0
+    entry_price = resp.get("price") or pending_record.get("cur_price", 0)
     risk_manager.record_trade_open(
         market_id, pending_record["market_question"], outcome,
         size_usd, entry_price, pending_record["category"], mode="live",
         signal_type=pending_record.get("signal_type", "consensus"),
         end_date=pending_record.get("end_date", "")
     )
-    return f"✅ Executed: ${size_usd:,.2f} on '{outcome}' (balance was ${balance:,.2f})."
+    state = resp.get("state", "unknown")
+    return (f"✅ Submitted: ${size_usd:,.2f} on '{outcome}' (state: {state}, "
+            f"tradable balance was ${balance:,.2f}). requestId={resp.get('requestId')}")
 
 
 def _expire_stale_approvals(pending: dict) -> dict:
@@ -292,33 +333,27 @@ def _handle_wallet_command() -> str:
     """/wallet (or /balance) — on-demand wallet check, added 2026-09-08 so
     Levi can verify which wallet the bot is actually trading from and its
     live balance at any time, instead of waiting for a signal to fire and
-    get blocked. Read-only — never touches Render's environment, only
-    reads POLYMARKET_PRIVATE_KEY / POLYMARKET_WALLET_ADDRESS and asks
-    Polymarket for the current balance."""
+    get blocked.
+
+    Now backed by polybot_execution.py (2026-10-13) instead of
+    execution.py — reports the Polybot account's tradable balance and
+    positions value instead of an on-chain wallet address. Read-only
+    either way, never touches Render's environment."""
     if os.environ.get("PAPER_MODE", "").lower() in ("true", "1", "yes"):
         return "⚠️ PAPER_MODE is on — no real wallet is in use."
 
-    import execution
+    import polybot_execution as execution
 
     status = execution.get_wallet_status()
     if status["mode"] == "error":
-        return f"⚠️ Could not check the wallet: {status['error']}"
+        return f"⚠️ Could not check the Polybot account: {status['error']}"
 
-    if status["mode"] == "proxy":
-        lines = [
-            f"Trading wallet: {status['trading_address']}",
-            f"Signed by: {status['signer_address']} (this is expected to be a "
-            f"different address — that's how proxy/Telegram-connected accounts work)",
-        ]
-    else:
-        lines = [f"Trading wallet: {status['trading_address']}"]
-
-    try:
-        balance = execution.get_wallet_balance_usd()
-        lines.append(f"Balance: ${balance:,.2f}")
-    except Exception as e:
-        lines.append(f"Could not fetch balance right now: {e}")
-
+    lines = [
+        status["trading_address"],
+        f"Tradable balance: ${status['tradable_balance']:,.2f}",
+        f"Positions value: ${status['positions_value']:,.2f}",
+        f"Live execution: {'ON' if live_execution.is_enabled() else 'OFF (kill switch)'}",
+    ]
     return "\n".join(lines)
 
 

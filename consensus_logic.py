@@ -22,6 +22,15 @@ class Position:
     end_date: str = ""     # market's expected resolution date, as reported by Polymarket
     cur_price: float = 0.0 # current market price for this specific outcome (0-1)
     event_slug: str = ""   # for building a link to the market's public Polymarket page
+    market_slug: str = ""  # the MARKET's own slug (distinct from event_slug) — added
+                            # 2026-10-13 for Polybot order placement, which requires this
+                            # on every order. Polymarket's /positions response reports it
+                            # as "slug" alongside eventSlug.
+    negative_risk: bool = False  # Polymarket's own flag for markets using "negative risk"
+                                   # multi-outcome CTF handling — added 2026-10-13, also
+                                   # required on every Polybot order. Defaults False (the
+                                   # common case for a plain binary market) if Polymarket's
+                                   # raw data doesn't report it.
 
 
 @dataclass
@@ -37,6 +46,8 @@ class ConsensusSignal:
     end_date: str = ""
     cur_price: float = 0.0
     event_slug: str = ""
+    market_slug: str = ""        # see Position.market_slug above
+    negative_risk: bool = False  # see Position.negative_risk above
 
     @property
     def count(self) -> int:
@@ -113,6 +124,8 @@ def parse_positions(wallet: str, raw: list[dict], min_size: float = MIN_POSITION
             end_date=str(p.get("endDate") or ""),
             cur_price=cur_price,
             event_slug=str(p.get("eventSlug") or ""),
+            market_slug=str(p.get("slug") or ""),
+            negative_risk=bool(p.get("negativeRisk", False)),
         ))
     return out
 
@@ -126,7 +139,8 @@ def compute_consensus(all_positions: list[Position], threshold: int = CONSENSUS_
                 pos.market_id, pos.market_question, pos.outcome,
                 event_id=pos.event_id, token_id=pos.token_id,
                 end_date=pos.end_date, cur_price=pos.cur_price,
-                event_slug=pos.event_slug
+                event_slug=pos.event_slug, market_slug=pos.market_slug,
+                negative_risk=pos.negative_risk,
             )
         signal = grouped[key]
         if pos.wallet not in signal.agreeing_wallets:
