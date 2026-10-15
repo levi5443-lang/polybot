@@ -62,6 +62,7 @@ import logging
 
 import wallet_tracker
 from consensus_logic import compute_consensus
+from category_leaderboard import EXCLUDED_CATEGORIES
 
 log = logging.getLogger("early_movers")
 
@@ -94,12 +95,29 @@ def find_early_movers(all_positions: list, category_map: dict) -> list:
     into regular per-category consensus output.
     """
     qualifying_positions = []
+    skipped_category = 0
     skipped_resolved = 0
     skipped_age = 0
     skipped_move = 0
     skipped_band = 0
 
     for p in all_positions:
+        # EXCLUDED_CATEGORIES filter (added 2026-10-15 — real bug fix,
+        # Levi reported Crypto signals showing up here): this was the one
+        # signal-generating path in the codebase NOT applying it.
+        # category_leaderboard.py's EXCLUDED_CATEGORIES is documented as
+        # controlling which categories can produce trading SIGNALS (not
+        # which positions get tracked for accuracy) — Consensus already
+        # respected this because Crypto never gets a category leaderboard
+        # entry at all, so no Consensus signal could ever form for it.
+        # Early Movers works off the full all_positions list directly and
+        # had no equivalent check, so Crypto positions were passing
+        # straight through to real alerts.
+        category = category_map.get(p.event_id, "Uncategorized")
+        if category in EXCLUDED_CATEGORIES:
+            skipped_category += 1
+            continue
+
         rec = wallet_tracker.get_wallet_overall_record(p.wallet)
         if rec["total_resolved"] < EARLY_MOVER_MIN_RESOLVED:
             skipped_resolved += 1
@@ -123,9 +141,10 @@ def find_early_movers(all_positions: list, category_map: dict) -> list:
 
     log.info(
         "Early movers: %d/%d position(s) pass the price-based quality gate "
-        "(%d+ resolved [%d dropped], opened <= %dmin ago [%d dropped], "
+        "(excluded category [%d dropped], %d+ resolved [%d dropped], opened <= %dmin ago [%d dropped], "
         "moved %d+pts in their favor [%d dropped], price in %d-%d%% band [%d dropped]).",
         len(qualifying_positions), len(all_positions),
+        skipped_category,
         EARLY_MOVER_MIN_RESOLVED, skipped_resolved,
         EARLY_MOVER_MAX_POSITION_AGE_MINUTES, skipped_age,
         EARLY_MOVER_MIN_PRICE_MOVE_PTS, skipped_move,
