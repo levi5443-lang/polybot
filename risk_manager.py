@@ -214,6 +214,15 @@ def record_trade_closed(market_id: str, outcome: str, realized_pnl: float) -> No
     _save_trade_log(trades)
 
 
+def get_all_trades() -> list[dict]:
+    """Read-only accessor to the full trade ledger (every mode, open and
+    closed) — added 2026-10-15 for trade_optimizer.py's sensitivity
+    analysis, so that module doesn't need to reach into this one's
+    private _load_trade_log(). Returns the raw list of trade dicts
+    exactly as stored; callers should treat it as read-only."""
+    return _load_trade_log()
+
+
 # todays_realized_loss_usd() / daily_loss_cap_reached() were removed here
 # along with DAILY_LOSS_CAP_USD (2026-09-08, Levi's request) — there is no
 # longer a daily realized-loss cap blocking new live trades. Position

@@ -76,6 +76,7 @@ HELP_TEXT = (
     "/positions — currently open trades\n"
     "/history — most recent resolved trades\n"
     "/accuracy — overall win rate + ROI + open trade count\n"
+    "/optimize — sensitivity analysis on resolved paper trades (read-only, nothing changes automatically)\n"
     "/resetpaper — wipe paper trade history (asks to confirm first)\n"
     "/wallet — check which wallet the bot is trading from + live balance\n"
     "/help — this message"
@@ -312,6 +313,9 @@ def _handle_text_command(text: str) -> None:
         reply = trade_tracker.format_history_message()
     elif text.startswith("/accuracy"):
         reply = trade_tracker.format_accuracy_command_message()
+    elif text.startswith("/optimize"):
+        import trade_optimizer
+        reply = trade_optimizer.format_optimization_report()
     elif text.startswith("/resetpaper confirm"):
         removed = risk_manager.reset_paper_trades()
         reply = f"✅ Cleared {removed} paper trade(s). Starting fresh."
