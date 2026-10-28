@@ -90,14 +90,24 @@ def analyze_consensus_agreement_cutoffs(min_cutoff: int = 4, max_cutoff: int = 8
     return results
 
 
-def analyze_price_band(bucket_width: float = 0.2) -> dict:
-    """Buckets ALL resolved paper trades (every signal type) by entry
-    price into bucket_width-wide bands (e.g. 0.0-0.2, 0.2-0.4, ...),
-    showing win rate/avg P&L per band — a direct empirical check on
-    whether the current price-room filters (15-85% for Consensus/Early
-    Movers) are set at a sensible boundary, or whether the data suggests
-    moving them. Returns {(band_start, band_end): stats}."""
+def analyze_price_band(bucket_width: float = 0.2, signal_type: str = None) -> dict:
+    """Buckets resolved paper trades by entry price into bucket_width-wide
+    bands (e.g. 0.0-0.2, 0.2-0.4, ...), showing win rate/avg P&L per band —
+    a direct empirical check on whether the current price-room filters
+    (15-85% for Consensus/Early Movers) are set at a sensible boundary, or
+    whether the data suggests moving them.
+
+    signal_type: None (default) pools every signal type together, matching
+    the original behavior. Pass a specific type (e.g. "early_mover") to
+    restrict the breakdown to just that signal — added 2026-10-28 because
+    the pooled view can't distinguish "this price band loses money" from
+    "one signal type's trades happen to cluster in this band and lose
+    money for a reason specific to that signal" (e.g. Early Movers'
+    15-85% band vs. Elite Mover's unbounded one landing in the same pooled
+    bucket). Returns {(band_start, band_end): stats}."""
     trades = _resolved_paper_trades()
+    if signal_type is not None:
+        trades = [t for t in trades if t.get("signal_type") == signal_type]
     results = {}
     band_start = 0.0
     while band_start < 1.0:
@@ -147,13 +157,28 @@ def format_optimization_report() -> str:
     price_bands = analyze_price_band()
     shown_any_band = any(v["total"] >= MIN_BUCKET_SAMPLE for v in price_bands.values())
     if shown_any_band:
-        lines.append("\n*By entry price band (all signal types):*")
+        lines.append("\n*By entry price band (all signal types pooled):*")
         for (lo, hi), stats in sorted(price_bands.items()):
             if stats["total"] >= MIN_BUCKET_SAMPLE:
                 lines.append(f"  {lo:.0%}-{hi:.0%}: {stats['wins']}/{stats['total']} ({stats['win_rate_pct']}%), "
                               f"avg P&L ${stats['avg_pnl']:+.2f}/unit")
 
-    if not shown_any_cutoff and not shown_any_band:
+    # Early Movers-only price band breakdown (added 2026-10-28): the pooled
+    # breakdown above can't tell whether a losing band is a general price
+    # effect or just where one signal type's trades happen to cluster, so
+    # this isolates Early Movers specifically to check directly whether its
+    # negative P&L concentrates near the top of its 15-85% band, rather than
+    # inferring that indirectly from the pooled 60-80% bucket.
+    em_price_bands = analyze_price_band(signal_type="early_mover")
+    shown_any_em_band = any(v["total"] >= MIN_BUCKET_SAMPLE for v in em_price_bands.values())
+    if shown_any_em_band:
+        lines.append("\n*Early Movers only — by entry price band:*")
+        for (lo, hi), stats in sorted(em_price_bands.items()):
+            if stats["total"] >= MIN_BUCKET_SAMPLE:
+                lines.append(f"  {lo:.0%}-{hi:.0%}: {stats['wins']}/{stats['total']} ({stats['win_rate_pct']}%), "
+                              f"avg P&L ${stats['avg_pnl']:+.2f}/unit")
+
+    if not shown_any_cutoff and not shown_any_band and not shown_any_em_band:
         lines.append("\nNot enough resolved trades in any one bucket yet for the deeper "
                       "breakdowns — check back as more resolve.")
 
