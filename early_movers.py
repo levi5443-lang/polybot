@@ -68,19 +68,44 @@ log = logging.getLogger("early_movers")
 
 MIN_EARLY_MOVERS = 1  # a single qualifying wallet is enough to fire the signal on its own
 
-EARLY_MOVER_MIN_RESOLVED = 5  # minimum resolved positions (overall, our own history) before a
-                               # wallet counts at all
+EARLY_MOVER_MIN_RESOLVED = 8   # minimum resolved positions (overall, our own history) before a
+                               # wallet counts at all. RAISED from 5 (2026-10-30, Levi's request)
+                               # — trade_optimizer's paper-trade data showed Early Movers at 27
+                               # resolved trades running a 59.3% win rate but -$0.12/unit avg P&L
+                               # (see trade_optimizer.py), i.e. winning more often than not while
+                               # still losing money, which points at entries with weak conviction
+                               # behind them rather than at the price band (the price-band
+                               # breakdown argued AGAINST tightening EARLY_MOVER_PRICE_BAND — see
+                               # that constant's comment below). Raising the wallet-quality bar is
+                               # a general conviction filter rather than a bet on any one price
+                               # sub-range, which matters because the per-band samples this was
+                               # diagnosed from were only 5-8 trades each — too thin to carve
+                               # precise price-band boundaries out of without real overfitting
+                               # risk, especially once live trading starts copying these signals.
 
 EARLY_MOVER_MAX_POSITION_AGE_MINUTES = 10080  # 7 days — how recently the wallet must have
                                                 # opened THIS position for a later price move to
                                                 # count as "early" rather than a stale thesis
                                                 # finally paying off (see module docstring)
 
-EARLY_MOVER_MIN_PRICE_MOVE_PTS = 10  # percentage points the price must have moved in the
+EARLY_MOVER_MIN_PRICE_MOVE_PTS = 15  # percentage points the price must have moved in the
                                       # wallet's favor since they entered, before it counts as
-                                      # "the market caught on to something they were early to"
+                                      # "the market caught on to something they were early to".
+                                      # RAISED from 10 (2026-10-30, Levi's request, same data as
+                                      # EARLY_MOVER_MIN_RESOLVED above) — requiring a more
+                                      # convincing move is the other general conviction filter
+                                      # applied alongside the wallet-quality bar, rather than
+                                      # touching the price band itself (see note above).
 
-EARLY_MOVER_PRICE_BAND = (0.15, 0.85)  # current price must stay inside this band — outside it,
+EARLY_MOVER_PRICE_BAND = (0.15, 0.85)  # LEFT UNCHANGED (2026-10-30 review) — trade_optimizer's
+                                         # Early-Movers-only price-band breakdown showed the
+                                         # 80-85% slice (6/6 resolved, +$0.20/unit) winning
+                                         # outright while 60-80% (5/8, -$0.18/unit) was the actual
+                                         # loser, so narrowing the top of this band would have cut
+                                         # the one part of it that's working. See
+                                         # EARLY_MOVER_MIN_RESOLVED/MIN_PRICE_MOVE_PTS above for
+                                         # the adjustment actually made instead. current price must
+                                         # stay inside this band — outside it,
                                          # the market's already converged toward certainty and
                                          # there's little room left to profit from entering now
 
