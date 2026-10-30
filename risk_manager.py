@@ -80,6 +80,39 @@ def reset_paper_trades() -> int:
     return removed_count
 
 
+def reset_live_trades() -> int:
+    """Wipes every live-mode entry from the trade log — open or closed —
+    while leaving any paper-mode entries completely untouched. Returns how
+    many live entries were removed. Added 2026-10-30 (Levi's explicit
+    request) as a counterpart to reset_paper_trades() above, kept as a
+    SEPARATE function rather than folded into one reset-everything call so
+    the two stay independently triggerable.
+
+    IMPORTANT — this is not symmetric with the paper reset in its blast
+    radius. Live entries represent real executed trades, and for the
+    self-custodied execution path, get_current_live_exposure_usd() above
+    sums size_usd across OPEN live entries in THIS SAME ledger to compute
+    how much exposure is already committed before sizing (and allowing)
+    the next live trade. Wiping this while any live position is still open
+    on Polymarket would make the bot think it has zero exposure when it
+    doesn't, letting compute_trade_size_usd() approve trades past the real
+    26% cap. Safe to call once everything currently open has actually
+    resolved/closed out on-chain; not safe to call as a casual "clear the
+    board" action the way the paper reset is. (The Polybot-backed
+    execution path reads its own live committed figure from Polybot
+    directly rather than this ledger, so it isn't affected by this gap —
+    but the historical record of past live trades is lost either way.)
+    This is intentionally NOT automatic, same as the paper reset — it only
+    runs when explicitly triggered (e.g. the /resetlive Telegram command)."""
+    trades = _load_trade_log()
+    remaining = [t for t in trades if t.get("mode") != "live"]
+    removed_count = len(trades) - len(remaining)
+    _save_trade_log(remaining)
+    log.info("Reset: removed %d live trade(s) from the ledger, %d paper trade(s) preserved.",
+              removed_count, len(remaining))
+    return removed_count
+
+
 def get_position_size_usd(wallet_balance_usd: float) -> float:
     """2% of current wallet balance. Recomputed fresh each trade — NOT 2%
     of some fixed starting amount — so it naturally shrinks if the bankroll

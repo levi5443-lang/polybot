@@ -78,6 +78,7 @@ HELP_TEXT = (
     "/accuracy — overall win rate + ROI + open trade count\n"
     "/optimize — sensitivity analysis on resolved paper trades (read-only, nothing changes automatically)\n"
     "/resetpaper — wipe paper trade history (asks to confirm first)\n"
+    "/resetlive — wipe live (real-money) trade history (asks to confirm first)\n"
     "/wallet — check which wallet the bot is trading from + live balance\n"
     "/help — this message"
 )
@@ -324,6 +325,23 @@ def _handle_text_command(text: str) -> None:
                   "(open and resolved) — accuracy, ROI, everything. Live trades "
                   "are never affected.\n\nSend /resetpaper confirm to proceed, "
                   "or ignore this to cancel.")
+    elif text.startswith("/resetlive confirm"):
+        removed = risk_manager.reset_live_trades()
+        reply = (f"✅ Cleared {removed} live trade(s). Paper trades are untouched.\n\n"
+                  f"If any of those were still OPEN on Polymarket when this ran, the "
+                  f"self-custodied exposure cap will now read $0 committed until a fresh "
+                  f"live trade re-establishes it — only matters if execution.py's direct "
+                  f"path is in use; the Polybot path reads its own live figure.")
+    elif text.startswith("/resetlive"):
+        reply = ("⚠️ This will permanently delete ALL live (real-money) trade history "
+                  "(open and resolved) — not just closed ones. Paper trades are never "
+                  "affected.\n\nIf any live positions are still OPEN right now, wiping "
+                  "them from the ledger will make the bot think it has $0 live exposure "
+                  "committed, which could let a new live trade past the 26% exposure cap "
+                  "that it shouldn't (self-custodied execution path only — the Polybot "
+                  "path tracks its own exposure separately). Only do this once everything "
+                  "currently open has actually resolved/closed.\n\n"
+                  "Send /resetlive confirm to proceed, or ignore this to cancel.")
     elif text.startswith("/wallet") or text.startswith("/balance"):
         reply = _handle_wallet_command()
     elif text.startswith("/help") or text.startswith("/start"):
