@@ -178,7 +178,22 @@ def format_optimization_report() -> str:
                 lines.append(f"  {lo:.0%}-{hi:.0%}: {stats['wins']}/{stats['total']} ({stats['win_rate_pct']}%), "
                               f"avg P&L ${stats['avg_pnl']:+.2f}/unit")
 
-    if not shown_any_cutoff and not shown_any_band and not shown_any_em_band:
+    # Elite Mover-only price band breakdown (added 2026-11-03, same reasoning
+    # as the Early Movers one above) — Elite Mover has no price-room filter
+    # at all (see category_leaderboard.py / consensus_bot.py), so this is
+    # purely diagnostic: is its P&L concentrated in any particular price
+    # range, or spread evenly? Useful context before deciding whether a
+    # price band would even help there, as opposed to a wallet-quality fix.
+    em2_price_bands = analyze_price_band(signal_type="elite_mover")
+    shown_any_em2_band = any(v["total"] >= MIN_BUCKET_SAMPLE for v in em2_price_bands.values())
+    if shown_any_em2_band:
+        lines.append("\n*Elite Mover only — by entry price band:*")
+        for (lo, hi), stats in sorted(em2_price_bands.items()):
+            if stats["total"] >= MIN_BUCKET_SAMPLE:
+                lines.append(f"  {lo:.0%}-{hi:.0%}: {stats['wins']}/{stats['total']} ({stats['win_rate_pct']}%), "
+                              f"avg P&L ${stats['avg_pnl']:+.2f}/unit")
+
+    if not shown_any_cutoff and not shown_any_band and not shown_any_em_band and not shown_any_em2_band:
         lines.append("\nNot enough resolved trades in any one bucket yet for the deeper "
                       "breakdowns — check back as more resolve.")
 
