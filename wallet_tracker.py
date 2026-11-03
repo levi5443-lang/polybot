@@ -347,7 +347,29 @@ def all_wallets_have_recent_streak(wallets: list[str], n: int = 2) -> tuple[bool
 
 CONVICTION_STANDOUT_THRESHOLD_PTS = 10  # how many points above/below baseline still counts as "in line with normal"
 ELITE_TRADE_MIN_WIN_RATE_PCT = 66.0
-ELITE_TRADE_MIN_RESOLVED = 2
+ELITE_TRADE_MIN_RESOLVED = 5  # RAISED from 2 (2026-11-03, Levi's request). This was the one
+                               # win-rate check in this file that didn't follow its own stated
+                               # rule — MIN_SAMPLE_SIZE = 5 above is the bar every OTHER win-rate
+                               # display/gate in this module waits for before trusting a
+                               # percentage rather than treating it as small-sample noise (see
+                               # that constant's comment: "early noise, e.g. 1-0, '100%', looks
+                               # like a meaningful signal when it's just one data point"). Elite
+                               # Mover's paper-trade gate required only 2, letting a 2-for-2 or
+                               # 3-for-4 category record pass the 66%+ ELITE_TRADE_MIN_WIN_RATE_PCT
+                               # bar as if it were proven. Diagnosed after a post-reset sample (9
+                               # resolved Elite Mover paper trades, 2026-10-30 to 2026-11-03) came
+                               # in at 22.2% win rate / -$0.58/unit avg P&L despite the filter
+                               # supposedly requiring 66%+ — a believable explanation is that the
+                               # filter itself was trusting too-thin category records, not that
+                               # "copy the top-ranked wallets' new positions" is inherently a bad
+                               # idea. Raising this to match MIN_SAMPLE_SIZE is the single
+                               # targeted change being tried before any conclusion is drawn;
+                               # ELITE_TRADE_MIN_WIN_RATE_PCT is deliberately left untouched so
+                               # the next resolved sample can show what THIS fix alone does,
+                               # rather than stacking two changes and not knowing which one moved
+                               # the numbers. Levi reset paper trades after this landed in prior
+                               # rounds (see EARLY_MOVER_MIN_RESOLVED above) so results start
+                               # clean rather than mixing pre/post-change trades.
 ELITE_TRADE_RECENT_STREAK = 2
 
 
