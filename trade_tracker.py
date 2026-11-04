@@ -13,7 +13,7 @@ import logging
 
 from polymarket_api import check_market_resolution, polite_sleep
 from risk_manager import _load_trade_log, _save_trade_log
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 log = logging.getLogger("trade_tracker")
 
@@ -298,6 +298,103 @@ def format_signal_type_breakdown(mode: str = "paper") -> str:
     return "\n".join(lines)
 
 
+# PERIOD BREAKDOWN (2026-11-04, Levi's request): daily/weekly/monthly/
+# yearly stats added to /accuracy, broken down by signal type. These are
+# ROLLING TO-DATE WINDOWS (everything resolved since the start of today/
+# this week/this month/this year, UTC), not a historical day-by-day log —
+# /history already covers "what happened on a specific day." A window with
+# zero resolved trades in a given mode, or a signal type with zero
+# resolved trades within a shown window, is left out entirely — same
+# convention format_signal_type_breakdown() above already uses.
+PERIODS = ["today", "week", "month", "year"]
+PERIOD_LABELS = {"today": "Today", "week": "This Week", "month": "This Month", "year": "This Year"}
+
+
+def _period_window_start(period: str) -> datetime:
+    """Start of the current UTC day/ISO week (Monday)/calendar month/
+    calendar year, as of right now — the lower bound for that period's
+    rolling window."""
+    now = datetime.now(timezone.utc)
+    start_of_today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    if period == "today":
+        return start_of_today
+    if period == "week":
+        return start_of_today - timedelta(days=now.weekday())
+    if period == "month":
+        return start_of_today.replace(day=1)
+    if period == "year":
+        return start_of_today.replace(month=1, day=1)
+    raise ValueError(f"Unknown period: {period!r}")
+
+
+def get_signal_type_breakdown_for_period(mode: str, period: str) -> dict:
+    """{signal_type: {wins, losses, total, win_rate_pct, roi_pct}} for
+    trades of the given mode CLOSED on or after that period's window
+    start (UTC). roi_pct is the same dollar-weighted (total P&L / total
+    invested) measure get_roi() uses — just scoped to this window instead
+    of all-time."""
+    start = _period_window_start(period)
+    trades = _load_trade_log()
+
+    windowed_by_type: dict[str, list] = {}
+    for t in trades:
+        if t.get("mode") != mode or t["status"] != "closed" or "correct" not in t:
+            continue
+        closed_at = t.get("closed_at")
+        if not closed_at:
+            continue
+        try:
+            closed_dt = datetime.fromisoformat(closed_at)
+        except (ValueError, TypeError):
+            continue
+        if closed_dt.tzinfo is None:
+            closed_dt = closed_dt.replace(tzinfo=timezone.utc)
+        if closed_dt < start:
+            continue
+        windowed_by_type.setdefault(t.get("signal_type", "consensus"), []).append(t)
+
+    result = {}
+    for st, trades_for_type in windowed_by_type.items():
+        wins = sum(1 for t in trades_for_type if t["correct"])
+        total = len(trades_for_type)
+        losses = total - wins
+        win_rate = round(100 * wins / total, 1) if total else None
+
+        priced = [t for t in trades_for_type if t.get("realized_pnl") is not None]
+        total_invested = sum(t["size_usd"] for t in priced)
+        total_pnl = sum(t["realized_pnl"] for t in priced)
+        roi_pct = round(100 * total_pnl / total_invested, 1) if total_invested > 0 else None
+
+        result[st] = {
+            "wins": wins, "losses": losses, "total": total,
+            "win_rate_pct": win_rate, "roi_pct": roi_pct,
+        }
+    return result
+
+
+def format_period_breakdown(mode: str = "paper") -> str:
+    """e.g.:
+      Today:
+        Elite Mover: 2/2 (100.0%), ROI +34.2%
+      This Week:
+        Consensus: 5/7 (71.4%), ROI +18.0%
+        Elite Mover: 3/4 (75.0%), ROI +12.0%
+    Empty string if no period has any resolved trades yet in this mode."""
+    lines = []
+    for period in PERIODS:
+        breakdown = get_signal_type_breakdown_for_period(mode, period)
+        if not breakdown:
+            continue
+        lines.append(f"  {PERIOD_LABELS[period]}:")
+        for st in sorted(breakdown.keys()):
+            stats = breakdown[st]
+            label = SIGNAL_TYPE_LABELS.get(st, st)
+            roi_note = f", ROI {stats['roi_pct']:+.1f}%" if stats["roi_pct"] is not None else ""
+            lines.append(f"    {label}: {stats['wins']}/{stats['total']} "
+                          f"({stats['win_rate_pct']}%){roi_note}")
+    return "\n".join(lines)
+
+
 def format_accuracy_command_message() -> str:
     """Response for the /accuracy Telegram command — same numbers as the
     daily digest's running totals, available on demand."""
@@ -320,6 +417,10 @@ def format_accuracy_command_message() -> str:
         if signal_breakdown:
             lines.append("By signal type:")
             lines.append(signal_breakdown)
+        period_breakdown = format_period_breakdown(mode="paper")
+        if period_breakdown:
+            lines.append("By period (signal type):")
+            lines.append(period_breakdown)
     else:
         lines.append("Paper: no resolved trades yet")
     if live["total_closed"] > 0:
@@ -334,6 +435,10 @@ def format_accuracy_command_message() -> str:
         if signal_breakdown:
             lines.append("By signal type:")
             lines.append(signal_breakdown)
+        period_breakdown = format_period_breakdown(mode="live")
+        if period_breakdown:
+            lines.append("By period (signal type):")
+            lines.append(period_breakdown)
     else:
         lines.append("Live: no resolved trades yet")
     trades = _load_trade_log()
