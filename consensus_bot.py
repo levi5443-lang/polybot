@@ -96,15 +96,17 @@ def execute_trade(signal, signal_type="consensus"):
 
 
 def request_live_trade(signal, signal_type="consensus"):
-    """Asks for approval via Telegram before trading real money — see
-    trade_approval.py for the actual approve/reject handling, which
-    happens on a later cycle once you respond. Called for every signal
-    alongside execute_trade() above (added 2026-10-11); the two no
-    longer gate each other.
+    """Places a live (real-money) trade immediately — no Approve/Reject
+    step (removed 2026-11-04, Levi's request). See
+    trade_approval.auto_execute_trade() for what still runs underneath:
+    the same dedup check, live kill switch, fresh balance/exposure check,
+    and 26% exposure cap that used to run when you tapped Approve — none
+    of that changed, only the manual tap itself is gone. Called for every
+    signal alongside execute_trade() above (added 2026-10-11); the two
+    don't gate each other.
 
-    signal_type is carried through to the pending-approval record so
-    that, if approved, the trade gets logged with the right signal_type
-    (see trade_approval.py) — same purpose as in execute_trade() above."""
+    signal_type is carried through so the trade gets logged with the
+    right signal_type — same purpose as in execute_trade() above."""
     import risk_manager
     import trade_approval
 
@@ -114,16 +116,11 @@ def request_live_trade(signal, signal_type="consensus"):
         return
 
     if not signal.token_id:
-        log.error("No token_id available for '%s' [%s] — cannot request approval.",
+        log.error("No token_id available for '%s' [%s] — cannot place live trade.",
                   signal.market_question, signal.outcome)
         return
 
-    if trade_approval.has_pending_approval(signal.market_id, signal.outcome):
-        log.info("Already have a pending approval request for '%s' [%s] — not asking again.",
-                  signal.market_question, signal.outcome)
-        return
-
-    trade_approval.request_trade_approval(signal, signal_type=signal_type)
+    trade_approval.auto_execute_trade(signal, signal_type=signal_type)
 
 
 def run_once():

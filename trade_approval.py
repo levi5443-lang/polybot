@@ -284,6 +284,43 @@ def _execute_approved_trade(pending_record: dict) -> str:
             f"tradable balance was ${balance:,.2f}). requestId={resp.get('requestId')}")
 
 
+def auto_execute_trade(signal, signal_type: str = "consensus") -> None:
+    """Places a live trade immediately — no Approve/Reject step, no
+    Telegram message either way (2026-11-04, Levi's request: the manual
+    gateway is removed for all three signal types now that paper trading
+    is consistently profitable). This is request_trade_approval() and a
+    button tap collapsed into one call: it builds the same record shape
+    request_trade_approval() used to store, then runs it straight through
+    _execute_approved_trade() — so every real-money check that function
+    already ran on Approve still runs here unchanged (dedup via
+    has_ever_traded, the live_execution.is_enabled() kill switch, a fresh
+    balance/exposure check, the 26% total exposure cap). Only the manual
+    step disappears; the risk controls don't.
+
+    Logs the result either way, so Render's logs still show what happened
+    and why even with no Telegram confirmation."""
+    pending_record = {
+        "market_id": signal.market_id,
+        "outcome": signal.outcome,
+        "market_question": signal.market_question,
+        "category": signal.category,
+        "token_id": signal.token_id,
+        "end_date": signal.end_date,
+        "signal_type": signal_type,
+        "market_slug": getattr(signal, "market_slug", ""),
+        "negative_risk": getattr(signal, "negative_risk", False),
+        "cur_price": getattr(signal, "cur_price", 0.0),
+    }
+    try:
+        result = _execute_approved_trade(pending_record)
+    except Exception as e:
+        log.error("Auto-execute for '%s' [%s] raised an exception: %s",
+                   signal.market_question, signal.outcome, e, exc_info=True)
+        return
+    log.info("Auto-execute result for '%s' [%s]: %s",
+              signal.market_question, signal.outcome, result)
+
+
 def _expire_stale_approvals(pending: dict) -> dict:
     now = datetime.now(timezone.utc)
     still_pending = {}
